@@ -72,6 +72,21 @@ Clear `__pycache__` before deploying (TL;DR does this).
 
 ---
 
+## ⚠️ Keep pyproject.toml dependencies empty
+
+`pyproject.toml` intentionally declares `dependencies = []`. All runtime packages
+(`streamlit`, `snowflake-snowpark-python`, `pandas`, `openpyxl`) are pre-installed
+in the SiS container runtime from the Snowflake Anaconda channel. Declaring them
+triggers a PyPI fetch, which fails without External Access Integration (EAI) — the
+`"Failed to fetch https://pypi.org/simple/..."` boot error.
+
+For local dev, install from `requirements.txt` instead:
+```bash
+uv pip install -r requirements.txt
+```
+
+---
+
 ## Persistent data (Snowflake tables, not local files)
 
 Unlike a local run, the SiS container resets between sessions — local file writes are lost.
