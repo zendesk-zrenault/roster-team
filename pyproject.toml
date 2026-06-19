@@ -5,8 +5,7 @@ description = "Monthly Team Roster automation — Snowflake-sourced Workday data
 requires-python = ">= 3.11"
 
 dependencies = [
-    "streamlit[snowflake]",   # bundles snowpark + pandas; SiS-compatible
-    "openpyxl>=3.1",          # .xlsx export only; not used for storage
+    "streamlit[snowflake]",   # bundles snowpark + pandas; openpyxl pre-installed in SiS runtime
 ]
 
 [project.optional-dependencies]

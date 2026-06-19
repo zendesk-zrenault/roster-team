@@ -1,2 +1,1 @@
 streamlit[snowflake]
-openpyxl>=3.1
