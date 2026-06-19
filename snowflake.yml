@@ -1,0 +1,23 @@
+definition_version: '2'
+entities:
+  Advocacy_Monthly_Roster:
+    type: streamlit
+    identifier:
+      database: STREAMLIT_APPS
+      schema: ADVOCACY_MONTHLY_ROSTER
+      name: Advocacy_Monthly_Roster
+    title: "Advocacy Monthly Roster"
+    main_file: streamlit_app.py
+    query_warehouse: PUBLIC_ZENDESK_L
+    compute_pool: SYSTEM_COMPUTE_POOL_CPU
+    runtime_name: SYSTEM$ST_CONTAINER_RUNTIME_PY3_11
+    stage: production
+    artifacts:
+      # .streamlit/config.toml ONLY — never the whole dir, or secrets.toml
+      # (gitignored but present locally) would ship into the deployed app.
+      - .streamlit/config.toml
+      - streamlit_app.py
+      - pyproject.toml
+      - core/
+      - services/
+      - ui/

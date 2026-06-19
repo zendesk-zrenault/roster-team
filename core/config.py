@@ -90,14 +90,19 @@ ZENDESK_USERS_TABLE: str | None = None
 ZENDESK_USERS_EMAIL_COL = "EMAIL"
 ZENDESK_USERS_NAME_COL = "NAME"
 
-# --- Local persisted data ----------------------------------------------------
-DATA_DIR = "data"
-Z2_NAMES_CACHE = "data/z2_names_list.csv"  # columns: Email, Z2 Name
+# --- Snowflake persisted data (replaces local files for cloud deployment) ----
+# These tables live in STREAMLIT_APPS.ADVOCACY_MONTHLY_ROSTER and are
+# readable/writable by the app's Snowflake session. Run
+# scripts/setup_snowflake.py once to create and seed them.
+PERSIST_DATABASE = "STREAMLIT_APPS"
+PERSIST_SCHEMA = "ADVOCACY_MONTHLY_ROSTER"
 
-# Basis file for the two carry-forward columns that exist in NO uploaded source:
-#   C "Region in Explore (Shift)" and M "Foreign Language Advocate".
-# It is a prior-roster-shaped workbook (roster headers on row 1) keyed by email.
-# New agents get appended back here after the user supplies their values, so the
-# basis grows month over month. Fallbacks: Workday region for C, "English" for M.
-BASIS_FILE = "data/basis_region_language.xlsx"
-BASIS_HEADER_ROW = 1  # 1-indexed row holding the column headers
+# Basis table for the two carry-forward columns (C and M) that exist in no
+# uploaded source file. Seeded from data/basis_region_language.xlsx.
+# Columns: EMAIL VARCHAR, REGION_EXPLORE VARCHAR, LANGUAGE VARCHAR.
+BASIS_TABLE = f"{PERSIST_DATABASE}.{PERSIST_SCHEMA}.ROSTER_BASIS"
+
+# Z2 Names cache: advocate email -> Zendesk account display name (roster col E).
+# Seeded from data/z2_names_list.csv (5,332 rows). Grows each month.
+# Columns: EMAIL VARCHAR, Z2_NAME VARCHAR.
+Z2_TABLE = f"{PERSIST_DATABASE}.{PERSIST_SCHEMA}.Z2_NAMES_CACHE"

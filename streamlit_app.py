@@ -207,4 +207,7 @@ if st.session_state.roster is not None:
         st.dataframe(final, hide_index=True)
 
 st.divider()
-st.caption(f"Z2 name cache: {len(lookups.load_z2_cache()):,} email→name pairs.")
+try:
+    st.caption(f"Z2 name cache: {len(lookups.load_z2_cache()):,} email→name pairs.")
+except Exception:
+    pass

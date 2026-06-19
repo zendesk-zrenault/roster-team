@@ -5,13 +5,8 @@ description = "Monthly Team Roster automation — Snowflake-sourced Workday data
 requires-python = ">= 3.11"
 
 dependencies = [
-    "streamlit>=1.57",
-    "pandas>=2.0",
-    "snowflake-snowpark-python>=1.11",
-    # secure-local-storage pulls in keyring so externalbrowser SSO caches the
-    # token (avoids a browser popup on every cached query).
-    "snowflake-connector-python[secure-local-storage]>=3.0",
-    "openpyxl>=3.1",
+    "streamlit[snowflake]",   # bundles snowpark + pandas; SiS-compatible
+    "openpyxl>=3.1",          # .xlsx export only; not used for storage
 ]
 
 [project.optional-dependencies]

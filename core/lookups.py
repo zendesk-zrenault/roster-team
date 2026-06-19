@@ -1,61 +1,76 @@
-"""Local persisted lookups: the Z2 (Zendesk display name) cache.
+"""Persisted Z2 (Zendesk display name) cache — backed by Snowflake.
 
-The Z2 Names List maps Advocate Email -> Zendesk/Z2 display name. It is the
-fallback source for roster column E and is appended to each month as new names
-are resolved (from Snowflake or manual entry).
+Replaces the local data/z2_names_list.csv. The table
+STREAMLIT_APPS.ADVOCACY_MONTHLY_ROSTER.Z2_NAMES_CACHE holds all previously
+resolved email→name pairs and is readable/writable by the app session.
 """
 
-from pathlib import Path
-
 import pandas as pd
+import streamlit as st
 
 from core import config
 
 
+@st.cache_data(ttl=600, show_spinner=False)
 def load_z2_cache() -> pd.DataFrame:
     """Return the Z2 cache as a DataFrame with columns Email, Z2 Name.
 
-    Emails are normalized to lowercase. Returns an empty frame if the cache
-    file does not exist yet.
+    Emails are normalised to lowercase. Returns an empty frame if the table
+    doesn't exist yet (before first setup_snowflake.py run).
     """
-    path = Path(config.Z2_NAMES_CACHE)
-    if not path.exists():
+    from services.workday_snowflake import get_session
+
+    try:
+        session = get_session()
+        df = session.sql(
+            f"SELECT EMAIL, Z2_NAME FROM {config.Z2_TABLE} ORDER BY EMAIL"
+        ).to_pandas()
+        df.columns = ["Email", "Z2 Name"]
+        df["Email"] = df["Email"].str.strip().str.lower()
+        df["Z2 Name"] = df["Z2 Name"].fillna("").str.strip()
+        return df.drop_duplicates(subset="Email", keep="last").reset_index(drop=True)
+    except Exception:
         return pd.DataFrame(columns=["Email", "Z2 Name"])
-    df = pd.read_csv(path, dtype=str).fillna("")
-    df["Email"] = df["Email"].str.strip().str.lower()
-    df["Z2 Name"] = df["Z2 Name"].str.strip()
-    return df.drop_duplicates(subset="Email", keep="last").reset_index(drop=True)
 
 
 def z2_name_map() -> dict[str, str]:
-    """Return {email_lower: z2_name} for fast lookups."""
+    """{email_lower: z2_name} for fast lookups."""
     df = load_z2_cache()
     return dict(zip(df["Email"], df["Z2 Name"], strict=False))
 
 
 def append_z2_names(new_pairs: dict[str, str]) -> int:
-    """Append newly-resolved email->name pairs to the Z2 cache.
+    """Append newly-resolved email→name pairs to the Snowflake Z2 table.
 
-    Existing emails are not overwritten. Returns the number of rows added.
+    Existing emails are not overwritten (INSERT ... IF NOT EXISTS pattern).
+    Returns the number of rows added.
     """
     if not new_pairs:
         return 0
 
-    existing = load_z2_cache()
-    have = set(existing["Email"])
-
+    have = set(load_z2_cache()["Email"])
     rows = [
-        {"Email": email.strip().lower(), "Z2 Name": str(name).strip()}
+        (email.strip().lower(), str(name).strip())
         for email, name in new_pairs.items()
         if email and name and email.strip().lower() not in have
     ]
     if not rows:
         return 0
 
-    combined = pd.concat([existing, pd.DataFrame(rows)], ignore_index=True)
-    combined = combined.drop_duplicates(subset="Email", keep="first").reset_index(drop=True)
+    from services.workday_snowflake import get_session
 
-    path = Path(config.Z2_NAMES_CACHE)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    combined.to_csv(path, index=False)
-    return len(rows)
+    try:
+        session = get_session()
+        values = ", ".join(
+            f"('{e.replace(chr(39), chr(39)*2)}', '{n.replace(chr(39), chr(39)*2)}')"
+            for e, n in rows
+        )
+        session.sql(
+            f"INSERT INTO {config.Z2_TABLE} (EMAIL, Z2_NAME) "
+            f"SELECT v.EMAIL, v.Z2_NAME FROM (VALUES {values}) AS v(EMAIL, Z2_NAME) "
+            f"WHERE NOT EXISTS (SELECT 1 FROM {config.Z2_TABLE} t WHERE t.EMAIL = v.EMAIL)"
+        ).collect()
+        load_z2_cache.clear()
+        return len(rows)
+    except Exception:
+        return 0

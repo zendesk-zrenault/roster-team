@@ -17,7 +17,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import openpyxl  # noqa: E402
 
-from core import lookups  # noqa: E402
 from services.export_xlsx import build_workbook  # noqa: E402
 from services.playvox import load_playvox_csv  # noqa: E402
 from services.roster_builder import build_roster, find_unresolved, split_departed  # noqa: E402
@@ -39,7 +38,7 @@ def main() -> None:
     assert pv.kept_count == 334, f"expected 334 kept, got {pv.kept_count}"
     print(f"✓ Playvox filter: kept {pv.kept_count}/{pv.total_rows}")
 
-    roster = build_roster(wd, pv, z2_map=lookups.z2_name_map())
+    roster = build_roster(wd, pv, z2_map={})  # z2 cache is Snowflake-backed; skip in offline test
     email_col = "Advocate Email"
     assert roster[email_col].is_unique, "duplicate emails survived dedup"
     print(f"✓ Roster built: {len(roster)} unique rows")

@@ -1,21 +1,21 @@
-"""Basis file for the two carry-forward roster columns that exist in no upload:
+"""Basis table for the two carry-forward roster columns that exist in no upload:
    C "Region in Explore (Shift)" and M "Foreign Language Advocate".
 
-The basis is a prior-roster-shaped .xlsx (roster headers on row 1) keyed by
-Advocate Email. Each month the app:
-  * carries C and M forward from the basis for known emails,
-  * detects roster emails NOT in the basis (new agents),
-  * after the user supplies region+language for them, appends those rows to the
-    basis so they are known next month.
+Backed by STREAMLIT_APPS.ADVOCACY_MONTHLY_ROSTER.ROSTER_BASIS in Snowflake
+(seeded from data/basis_region_language.xlsx by scripts/setup_snowflake.py).
+
+Each month the app:
+  * carries C and M forward from the table for known emails,
+  * detects roster emails NOT in the table (new agents),
+  * after the user supplies region+language, appends those rows so they are
+    known next month.
 
 Fallbacks when an email is absent and no value is supplied: the Workday region
 for C, and config.DEFAULT_FOREIGN_LANGUAGE for M.
 """
 
-from pathlib import Path
-
-import openpyxl
 import pandas as pd
+import streamlit as st
 
 from core import config
 
@@ -23,54 +23,46 @@ EMAIL_COL = config.ROSTER_COLUMNS["F"]            # "Advocate Email"
 REGION_EXPLORE_COL = config.ROSTER_COLUMNS["C"]   # "Region in Explore (Shift)"
 LANGUAGE_COL = config.ROSTER_COLUMNS["M"]         # "Foreign Language Advocate"
 
-# Tolerate the header drift seen in the sheet ("Role" vs "Role ").
-_BASIS_USECOLS = [EMAIL_COL, REGION_EXPLORE_COL, LANGUAGE_COL]
 
-
-def basis_exists() -> bool:
-    return Path(config.BASIS_FILE).exists()
-
-
+@st.cache_data(ttl=600, show_spinner=False)
 def load_basis() -> pd.DataFrame:
-    """Return the basis as a DataFrame [Email, Region in Explore, Language].
+    """Return the basis as a DataFrame [Advocate Email, Region in Explore, Language].
 
-    Emails are lowercased/stripped. Empty frame if the file is missing.
+    Emails are lowercased/stripped. Empty frame if the table is missing or empty.
     """
-    if not basis_exists():
-        return pd.DataFrame(columns=_BASIS_USECOLS)
+    from services.workday_snowflake import get_session
 
-    df = pd.read_excel(config.BASIS_FILE, header=config.BASIS_HEADER_ROW - 1, dtype=object)
-    df.columns = [str(c).strip() for c in df.columns]
-
-    # Be forgiving about which of the three columns are present.
-    for col in _BASIS_USECOLS:
-        if col not in df.columns:
-            df[col] = pd.NA
-    df = df[_BASIS_USECOLS].copy()
-
-    df[EMAIL_COL] = df[EMAIL_COL].astype("string").str.strip().str.lower()
-    df = df[df[EMAIL_COL].notna() & (df[EMAIL_COL] != "")]
-    return df.drop_duplicates(subset=EMAIL_COL, keep="last").reset_index(drop=True)
+    try:
+        session = get_session()
+        df = session.sql(
+            f"SELECT EMAIL, REGION_EXPLORE, LANGUAGE FROM {config.BASIS_TABLE} ORDER BY EMAIL"
+        ).to_pandas()
+        df.columns = [EMAIL_COL, REGION_EXPLORE_COL, LANGUAGE_COL]
+        df[EMAIL_COL] = df[EMAIL_COL].astype("string").str.strip().str.lower()
+        df = df[df[EMAIL_COL].notna() & (df[EMAIL_COL] != "")]
+        return df.drop_duplicates(subset=EMAIL_COL, keep="last").reset_index(drop=True)
+    except Exception:
+        return pd.DataFrame(columns=[EMAIL_COL, REGION_EXPLORE_COL, LANGUAGE_COL])
 
 
 def region_map() -> dict[str, str]:
     """{email: Region in Explore} from the basis (blanks dropped)."""
     df = load_basis()
-    out = {}
-    for email, region in zip(df[EMAIL_COL], df[REGION_EXPLORE_COL], strict=False):
-        if email and pd.notna(region) and str(region).strip():
-            out[email] = str(region).strip()
-    return out
+    return {
+        email: str(region).strip()
+        for email, region in zip(df[EMAIL_COL], df[REGION_EXPLORE_COL], strict=False)
+        if email and pd.notna(region) and str(region).strip()
+    }
 
 
 def language_map() -> dict[str, str]:
     """{email: Foreign Language} from the basis (blanks dropped)."""
     df = load_basis()
-    out = {}
-    for email, lang in zip(df[EMAIL_COL], df[LANGUAGE_COL], strict=False):
-        if email and pd.notna(lang) and str(lang).strip():
-            out[email] = str(lang).strip()
-    return out
+    return {
+        email: str(lang).strip()
+        for email, lang in zip(df[EMAIL_COL], df[LANGUAGE_COL], strict=False)
+        if email and pd.notna(lang) and str(lang).strip()
+    }
 
 
 def known_emails() -> set[str]:
@@ -78,12 +70,12 @@ def known_emails() -> set[str]:
 
 
 def existing_regions() -> list[str]:
-    """Distinct region values already in the basis (for dropdown options)."""
+    """Distinct region values already in the basis (for dropdown hints)."""
     return sorted({v for v in region_map().values()})
 
 
 def existing_languages() -> list[str]:
-    """Distinct language values already in the basis (for dropdown options)."""
+    """Distinct language values already in the basis (for dropdown hints)."""
     return sorted({v for v in language_map().values()})
 
 
@@ -96,8 +88,7 @@ def find_new_agents(
     Playvox/Agyle kept emails, i.e. agents present there with a valid business
     role). Workday-only agents are not prompted; they just take the fallbacks.
 
-    Returns [Advocate Email, Advocate, Region in Workday] — the Workday region is
-    the suggested default for Region in Explore.
+    Returns [Advocate Email, Advocate, Region in Workday].
     """
     have = known_emails()
     mask = ~roster[EMAIL_COL].isin(have)
@@ -109,43 +100,40 @@ def find_new_agents(
 
 
 def append_entries(entries: list[dict]) -> int:
-    """Append new agent rows to the basis workbook and save in place.
+    """Append new agent rows to the Snowflake basis table.
 
-    `entries` items: {"email": str, "region": str, "language": str}. Existing
-    emails are skipped. Returns the number of rows added. Writes a roster-shaped
-    sheet so the file stays reusable as a prior roster.
+    `entries` items: {"email": str, "region": str, "language": str}.
+    Existing emails are skipped (idempotent). Returns the number of rows added.
     """
+    if not entries:
+        return 0
+
+    have = known_emails()
     new = [
         e for e in entries
-        if e.get("email") and e["email"].strip().lower() not in known_emails()
+        if e.get("email") and e["email"].strip().lower() not in have
     ]
     if not new:
         return 0
 
-    path = Path(config.BASIS_FILE)
-    if path.exists():
-        wb = openpyxl.load_workbook(path)
-        ws = wb.active
-    else:
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.append(list(config.ROSTER_COLUMNS.values()))
+    from services.workday_snowflake import get_session
 
-    # Map header label -> 1-based column index from the basis header row.
-    headers = [
-        (ws.cell(row=config.BASIS_HEADER_ROW, column=c).value or "").strip()
-        for c in range(1, ws.max_column + 1)
-    ]
-    idx = {h: i + 1 for i, h in enumerate(headers)}
+    def _q(s: str) -> str:
+        return str(s).replace("'", "''")
 
-    for e in new:
-        row = ws.max_row + 1
-        if EMAIL_COL in idx:
-            ws.cell(row=row, column=idx[EMAIL_COL], value=e["email"].strip().lower())
-        if REGION_EXPLORE_COL in idx:
-            ws.cell(row=row, column=idx[REGION_EXPLORE_COL], value=e.get("region", ""))
-        if LANGUAGE_COL in idx:
-            ws.cell(row=row, column=idx[LANGUAGE_COL], value=e.get("language", ""))
-
-    wb.save(path)
-    return len(new)
+    values = ", ".join(
+        f"('{_q(e['email'].strip().lower())}', '{_q(e.get('region',''))}', '{_q(e.get('language',''))}')"
+        for e in new
+    )
+    try:
+        session = get_session()
+        session.sql(
+            f"INSERT INTO {config.BASIS_TABLE} (EMAIL, REGION_EXPLORE, LANGUAGE) "
+            f"SELECT v.EMAIL, v.REGION_EXPLORE, v.LANGUAGE "
+            f"FROM (VALUES {values}) AS v(EMAIL, REGION_EXPLORE, LANGUAGE) "
+            f"WHERE NOT EXISTS (SELECT 1 FROM {config.BASIS_TABLE} t WHERE t.EMAIL = v.EMAIL)"
+        ).collect()
+        load_basis.clear()
+        return len(new)
+    except Exception:
+        return 0
