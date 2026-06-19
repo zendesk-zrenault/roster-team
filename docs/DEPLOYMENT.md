@@ -49,7 +49,7 @@ Run the TL;DR command above.
 
 - **Database / Schema:** `STREAMLIT_APPS.ADVOCACY_MONTHLY_ROSTER`
 - **App name:** `Advocacy_Monthly_Roster`
-- **Runtime:** `SYSTEM$ST_CONTAINER_RUNTIME_PY3_11`, compute pool `SYSTEM_COMPUTE_POOL_CPU`
+- **Runtime:** standard **warehouse-based** runtime (NOT the container runtime — see gotcha #4)
 - **Warehouse:** `PUBLIC_ZENDESK_L`
 - **Owner role:** `STREAMLIT_APP_ADMIN_ROLE`
 - **Account:** `zendesk-global`
@@ -69,6 +69,32 @@ The `-x` flag (temporary connection from flags) + `--role STREAMLIT_APP_ADMIN_RO
 ### 3. Keep secrets + pycache OUT of the bundle
 `snowflake.yml` lists only `.streamlit/config.toml` (not the whole `.streamlit/` dir).
 Clear `__pycache__` before deploying (TL;DR does this).
+
+### 4. Use the warehouse runtime + pin packages in `environment.yml`
+This app uses the **standard warehouse-based runtime**, NOT the container runtime.
+Why: the container runtime (`SYSTEM$ST_CONTAINER_RUNTIME_PY3_11`) has a fixed package
+set that does **not** include `openpyxl` and ignores `environment.yml` — so the
+`.xlsx` export crashes with `ModuleNotFoundError: openpyxl`.
+
+The warehouse runtime installs packages from `environment.yml` (Snowflake Anaconda
+channel — no PyPI / no EAI needed). **You must pin Streamlit**, because the runtime
+otherwise defaults to an ancient 1.22.0 that lacks `st.file_uploader` / `st.data_editor`:
+```yaml
+# environment.yml
+name: sf_env
+channels:
+  - snowflake
+dependencies:
+  - streamlit=1.52.2   # newest in the Anaconda channel; 1.22.0 default is too old
+  - openpyxl=3.1.5
+```
+To check what versions the channel offers:
+```sql
+SELECT VERSION FROM INFORMATION_SCHEMA.PACKAGES
+WHERE PACKAGE_NAME='streamlit' AND LANGUAGE='python' ORDER BY VERSION DESC;
+```
+`snowflake.yml` has **no** `runtime_name`/`compute_pool` keys — omitting them selects
+the warehouse runtime.
 
 ---
 
