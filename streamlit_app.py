@@ -227,9 +227,8 @@ if st.session_state.roster is not None:
 # === Step 7: Apply corrections from a finalized month =======================
 st.header("7 · Apply corrections (optional)")
 st.caption(
-    "Upload a previously-finalized roster (e.g. one a manager edited — a new "
-    "agent added, or a Region in Explore / Language changed). Corrected values "
-    "are written back to the basis so they carry forward into next month's build."
+    "Upload a previously-finalized roster. Corrected will be written back to the "
+    "basis file so they carry forward into next month's build."
 )
 corr_file = st.file_uploader(
     "Corrected roster (.csv or .xlsx)", type=["csv", "xlsx"], key="corrections_uploader"
@@ -257,5 +256,5 @@ try:
     st.caption(f"Z2 name cache: {len(lookups.load_z2_cache()):,} email→name pairs.")
 except Exception:
     pass
-st.caption("App last updated: 2026-06-19 19:05 UTC")
+st.caption("App last updated: 2026-06-19 19:08 UTC")
 st.caption("For more information contact zrenault@zendesk.com")
