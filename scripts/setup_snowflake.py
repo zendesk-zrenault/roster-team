@@ -33,8 +33,6 @@ REGION_COL = config.ROSTER_COLUMNS["C"]
 LANG_COL = config.ROSTER_COLUMNS["M"]
 
 DDL = f"""
-CREATE DATABASE IF NOT EXISTS {config.PERSIST_DATABASE};
-
 CREATE SCHEMA IF NOT EXISTS {config.PERSIST_DATABASE}.{config.PERSIST_SCHEMA};
 
 CREATE TABLE IF NOT EXISTS {config.BASIS_TABLE} (
@@ -53,7 +51,12 @@ CREATE TABLE IF NOT EXISTS {config.Z2_TABLE} (
 
 
 def _get_session() -> Session:
-    return Session.builder.config("connection_name", config.DEFAULT_CONNECTION_NAME).create()
+    return (
+        Session.builder
+        .config("connection_name", config.DEFAULT_CONNECTION_NAME)
+        .config("role", "STREAMLIT_APP_ADMIN_ROLE")
+        .create()
+    )
 
 
 def _seed_basis(session: Session) -> int:
