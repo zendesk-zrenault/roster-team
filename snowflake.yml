@@ -9,8 +9,6 @@ entities:
     title: "Advocacy Monthly Roster"
     main_file: streamlit_app.py
     query_warehouse: PUBLIC_ZENDESK_L
-    compute_pool: SYSTEM_COMPUTE_POOL_CPU
-    runtime_name: SYSTEM$ST_CONTAINER_RUNTIME_PY3_11
     stage: production
     artifacts:
       # .streamlit/config.toml ONLY — never the whole dir, or secrets.toml
