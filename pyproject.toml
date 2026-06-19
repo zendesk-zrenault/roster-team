@@ -1,0 +1,44 @@
+[project]
+name = "roster-team"
+version = "0.1.0"
+description = "Monthly Team Roster automation — Snowflake-sourced Workday data + Playvox roles, exported as a Google-Sheets-ready .xlsx"
+requires-python = ">= 3.11"
+
+dependencies = [
+    "streamlit>=1.57",
+    "pandas>=2.0",
+    "snowflake-snowpark-python>=1.11",
+    # secure-local-storage pulls in keyring so externalbrowser SSO caches the
+    # token (avoids a browser popup on every cached query).
+    "snowflake-connector-python[secure-local-storage]>=3.0",
+    "openpyxl>=3.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.8.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["core*", "services*", "ui*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+exclude = [".venv", "venv", "*.egg-info", "__pycache__"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["core", "services", "ui"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

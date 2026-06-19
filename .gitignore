@@ -1,0 +1,24 @@
+# --- Sensitive data: NEVER commit employee PII ---
+samples/
+data/*.csv
+data/*.xlsx
+output/
+*.xlsx
+*.csv
+!samples/.gitkeep
+
+# --- Secrets ---
+.streamlit/secrets.toml
+.snowflake/
+
+# --- Python ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# --- OS ---
+.DS_Store
