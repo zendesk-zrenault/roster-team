@@ -1,1 +1,6 @@
-streamlit[snowflake]
+# Local dev only — not used by SiS deployment (deps declared in pyproject.toml are empty).
+# Install locally with: uv pip install -r requirements-dev.txt
+streamlit>=1.57
+snowflake-snowpark-python>=1.11
+snowflake-connector-python[secure-local-storage]>=3.0
+openpyxl>=3.1

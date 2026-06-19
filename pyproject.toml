@@ -4,10 +4,10 @@ version = "0.1.0"
 description = "Monthly Team Roster automation — Snowflake-sourced Workday data + Playvox roles, exported as a Google-Sheets-ready .xlsx"
 requires-python = ">= 3.11"
 
-dependencies = [
-    "streamlit[snowflake]",   # bundles snowpark + pandas
-    "openpyxl",               # .xlsx export; resolved from Snowflake Anaconda channel
-]
+dependencies = []
+# All runtime deps (streamlit, snowflake-snowpark-python, pandas, openpyxl)
+# are pre-installed in the SiS container runtime from the Snowflake Anaconda
+# channel — declaring them here triggers a PyPI fetch which fails without EAI.
 
 [project.optional-dependencies]
 dev = [
