@@ -19,6 +19,7 @@ entities:
       # from PyPI, which fails without EAI. All needed packages are pre-installed
       # in the container runtime from the Snowflake Anaconda channel.
       - .streamlit/config.toml
+      - environment.yml
       - streamlit_app.py
       - core/
       - services/
