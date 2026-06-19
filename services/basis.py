@@ -137,3 +137,48 @@ def append_entries(entries: list[dict]) -> int:
         return len(new)
     except Exception:
         return 0
+
+
+def upsert_entries(entries: list[dict]) -> int:
+    """Insert new emails and UPDATE existing ones (for manager corrections).
+
+    `entries` items: {"email": str, "region": str, "language": str}. Blank
+    region/language values do NOT overwrite an existing non-blank value. Returns
+    the number of rows written (inserted + updated).
+    """
+    rows = [
+        (
+            e["email"].strip().lower(),
+            str(e.get("region", "") or "").strip(),
+            str(e.get("language", "") or "").strip(),
+        )
+        for e in entries
+        if e.get("email")
+    ]
+    if not rows:
+        return 0
+
+    from services.workday_snowflake import get_session
+
+    def _q(s: str) -> str:
+        return str(s).replace("'", "''")
+
+    values = ", ".join(f"('{_q(e)}', '{_q(r)}', '{_q(lang)}')" for e, r, lang in rows)
+    try:
+        session = get_session()
+        # MERGE: update existing rows (keeping a prior value when the incoming one
+        # is blank), insert brand-new emails.
+        session.sql(
+            f"MERGE INTO {config.BASIS_TABLE} t "
+            f"USING (VALUES {values}) AS v(EMAIL, REGION_EXPLORE, LANGUAGE) "
+            f"ON t.EMAIL = v.EMAIL "
+            f"WHEN MATCHED THEN UPDATE SET "
+            f"  REGION_EXPLORE = IFF(v.REGION_EXPLORE = '', t.REGION_EXPLORE, v.REGION_EXPLORE), "
+            f"  LANGUAGE = IFF(v.LANGUAGE = '', t.LANGUAGE, v.LANGUAGE) "
+            f"WHEN NOT MATCHED THEN INSERT (EMAIL, REGION_EXPLORE, LANGUAGE) "
+            f"  VALUES (v.EMAIL, v.REGION_EXPLORE, v.LANGUAGE)"
+        ).collect()
+        load_basis.clear()
+        return len(rows)
+    except Exception:
+        return 0

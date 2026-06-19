@@ -16,8 +16,9 @@ warnings.filterwarnings("ignore")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import openpyxl  # noqa: E402
+import pandas as pd  # noqa: E402
 
-from services.export_xlsx import build_workbook  # noqa: E402
+from services.export_xlsx import build_csv, build_workbook  # noqa: E402
 from services.playvox import load_playvox_csv  # noqa: E402
 from services.roster_builder import build_roster, find_unresolved, split_departed  # noqa: E402
 from services.workday_file import load_workday_file  # noqa: E402
@@ -60,7 +61,17 @@ def main() -> None:
     assert "'July 2026 Playvox Roster'" in ws["L7"].value, ws["L7"].value
     assert "'All Teams June 2026'" in ws["M7"].value, ws["M7"].value  # prior-month carry-forward
     wb.close()
-    print(f"✓ Export: 3 tabs, formulas reference correct month tabs ({len(data):,} bytes)")
+    print(f"✓ Export (.xlsx): 3 tabs, formulas reference correct month tabs ({len(data):,} bytes)")
+
+    # CSV export: resolved values, no formulas, all 14 roster columns present.
+    csv_bytes = build_csv(roster)
+    csv_df = pd.read_csv(io.BytesIO(csv_bytes))
+    assert list(csv_df.columns) == list(roster.columns), csv_df.columns.tolist()
+    assert len(csv_df) == len(roster), (len(csv_df), len(roster))
+    assert not csv_df.astype(str).apply(lambda c: c.str.startswith("=")).any().any(), (
+        "CSV must contain resolved values, not formulas"
+    )
+    print(f"✓ Export (.csv): {len(csv_df)} rows, 14 cols, no formulas ({len(csv_bytes):,} bytes)")
 
     print("\nALL CHECKS PASSED")
 

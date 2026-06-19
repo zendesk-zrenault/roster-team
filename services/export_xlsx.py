@@ -14,6 +14,7 @@ The roster header sits on row 6, data starts on row 7 (matching the live sheet),
 so a user can paste any tab straight in.
 """
 
+import datetime
 import io
 
 import openpyxl
@@ -21,6 +22,50 @@ import pandas as pd
 
 from core import config, refs
 from services.playvox import PlayvoxResult
+
+
+def _clean_csv(value):
+    """Coerce a pandas value into a clean CSV cell (resolved value, not formula).
+
+    NA/NaT -> "", dates -> ISO (date-only when midnight), numpy scalars -> native.
+    """
+    if value is None:
+        return ""
+    if not isinstance(value, (list, tuple)):
+        try:
+            if pd.isna(value):
+                return ""
+        except (TypeError, ValueError):
+            pass
+    if isinstance(value, pd.Timestamp):
+        value = value.to_pydatetime()
+    if isinstance(value, datetime.datetime):
+        return value.date().isoformat() if value.time() == datetime.time(0, 0) else value.isoformat(sep=" ")
+    if isinstance(value, datetime.date):
+        return value.isoformat()
+    if hasattr(value, "item"):  # numpy scalar -> native python
+        try:
+            return value.item()
+        except (ValueError, AttributeError):
+            pass
+    return value
+
+
+def build_csv(roster_df) -> bytes:
+    """Return the resolved roster (A..N, real values) as CSV bytes.
+
+    Unlike the formula-based .xlsx, this holds the actual resolved values
+    (Z2 name, Region in Explore, manager, etc.), so it opens cleanly in Excel
+    and Google Sheets alike. utf-8-sig so Excel detects UTF-8.
+    """
+    df = roster_df.reindex(columns=list(config.ROSTER_COLUMNS.values())).copy()
+    for col in df.columns:
+        df[col] = df[col].map(_clean_csv)
+    return df.to_csv(index=False).encode("utf-8-sig")
+
+
+def output_csv_filename(month_num: int, year: int) -> str:
+    return f"Roster_{refs.month_name(month_num)}_{year}.csv"
 
 
 def _clean(value):

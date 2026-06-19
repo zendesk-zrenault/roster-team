@@ -18,7 +18,7 @@ import datetime
 import streamlit as st
 
 from core import config, lookups, refs
-from services import basis, export_xlsx, roster_builder, zendesk_names
+from services import basis, corrections, export_xlsx, roster_builder, zendesk_names
 from services.playvox import load_playvox_csv
 from services.workday_file import load_workday_file
 from services.workday_snowflake import fetch_workday_roster, test_connection
@@ -195,21 +195,67 @@ if st.session_state.roster is not None:
         f"Final roster: **{len(final):,}** rows "
         f"(removed {len(to_delete)} departed/absent, {len(disregarded)} disregarded)."
     )
-    data = export_xlsx.build_workbook(final, wd, st.session_state.playvox, month, year)
+
+    # CSV holds the fully-resolved values (Z2 name, Region in Explore, manager,
+    # etc.) — opens cleanly in Excel and Google Sheets. This is the primary export.
+    csv_data = export_xlsx.build_csv(final)
     st.download_button(
-        "⬇️ Download roster .xlsx",
-        data=data,
-        file_name=export_xlsx.output_filename(month, year),
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "⬇️ Download roster (.csv)",
+        data=csv_data,
+        file_name=export_xlsx.output_csv_filename(month, year),
+        mime="text/csv",
         type="primary",
     )
+
+    with st.expander("Advanced: .xlsx with live Google formulas (for pasting into the Sheet)"):
+        st.caption(
+            "This workbook keeps live VLOOKUP/REGEXMATCH formulas tied to the "
+            "monthly tabs. It is built for **Google Sheets** — Excel will warn "
+            "about the formulas and may strip them. Use the CSV above for Excel."
+        )
+        xlsx_data = export_xlsx.build_workbook(final, wd, st.session_state.playvox, month, year)
+        st.download_button(
+            "⬇️ Download roster .xlsx (Google Sheets)",
+            data=xlsx_data,
+            file_name=export_xlsx.output_filename(month, year),
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
     with st.expander("Final roster preview"):
         st.dataframe(final, hide_index=True)
+
+# === Step 7: Apply corrections from a finalized month =======================
+st.header("7 · Apply corrections (optional)")
+st.caption(
+    "Upload a previously-finalized roster (e.g. one a manager edited — a new "
+    "agent added, or a Region in Explore / Language changed). Corrected values "
+    "are written back to the basis so they carry forward into next month's build."
+)
+corr_file = st.file_uploader(
+    "Corrected roster (.csv or .xlsx)", type=["csv", "xlsx"], key="corrections_uploader"
+)
+if corr_file is not None:
+    try:
+        corr_df = corrections.load_corrected_roster(corr_file)
+        st.success(f"Read {len(corr_df):,} rows from the corrected roster.")
+        with st.expander("Preview corrected roster"):
+            st.dataframe(corr_df, hide_index=True)
+        if st.button("Apply corrections to the basis", type="primary"):
+            result = corrections.apply_corrections(corr_df)
+            st.success(
+                f"Basis updated: {result['basis_inserted']} added, "
+                f"{result['basis_updated']} updated. "
+                f"Z2 names: {result['z2_added']} added."
+            )
+            basis.load_basis.clear()
+            lookups.load_z2_cache.clear()
+    except ValueError as exc:
+        st.error(str(exc))
 
 st.divider()
 try:
     st.caption(f"Z2 name cache: {len(lookups.load_z2_cache()):,} email→name pairs.")
 except Exception:
     pass
-st.caption("App last updated: 2026-06-19 18:12 UTC")
+st.caption("App last updated: 2026-06-19 19:05 UTC")
 st.caption("For more information contact zrenault@zendesk.com")
