@@ -9,10 +9,6 @@ dependencies = []
 # are pre-installed in the SiS container runtime from the Snowflake Anaconda
 # channel — declaring them here triggers a PyPI fetch which fails without EAI.
 
-[project.optional-dependencies]
-dev = [
-    "ruff>=0.8.0",
-]
 
 [build-system]
 requires = ["setuptools>=61.0"]
