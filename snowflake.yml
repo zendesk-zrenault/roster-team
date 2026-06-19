@@ -15,9 +15,11 @@ entities:
     artifacts:
       # .streamlit/config.toml ONLY — never the whole dir, or secrets.toml
       # (gitignored but present locally) would ship into the deployed app.
+      # pyproject.toml intentionally excluded: SiS tries to install its deps
+      # from PyPI, which fails without EAI. All needed packages are pre-installed
+      # in the container runtime from the Snowflake Anaconda channel.
       - .streamlit/config.toml
       - streamlit_app.py
-      - pyproject.toml
       - core/
       - services/
       - ui/
