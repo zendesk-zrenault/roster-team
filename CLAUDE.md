@@ -3,28 +3,59 @@
 This app automates the monthly Advocacy team-roster build. Read this before
 editing; it captures the verified facts and the non-obvious design decisions.
 
-## Carry-forward columns C and M — the basis file
+## Deployment & persistence (Snowflake-backed)
+
+The app is deployed to **Streamlit in Snowflake (SiS)**, not a local-only tool.
+SiS containers reset between sessions, so the two carry-forward stores are
+**Snowflake tables**, not local files (full deploy guide: `docs/DEPLOYMENT.md`):
+- `STREAMLIT_APPS.ADVOCACY_MONTHLY_ROSTER.ROSTER_BASIS` (EMAIL, REGION_EXPLORE, LANGUAGE)
+- `STREAMLIT_APPS.ADVOCACY_MONTHLY_ROSTER.Z2_NAMES_CACHE` (EMAIL, Z2_NAME)
+
+`services/basis.py` and `core/lookups.py` read/write these via Snowpark SQL.
+Seed them once with `scripts/setup_snowflake.py`. **SiS gotchas** (all documented
+in DEPLOYMENT.md, each cost a deploy cycle): use the warehouse runtime not the
+container runtime; pin packages in `environment.yml` (`streamlit=1.52.2`,
+`openpyxl=3.1.5`); never ship `pyproject.toml` (triggers a PyPI fetch → EAI error).
+
+## Carry-forward columns C and M — the basis table
 
 **Region in Explore (col C)** and **Foreign Language (col M)** are NOT in any
-uploaded source — they are maintained month to month in a **basis file**
-(`data/basis_region_language.xlsx`, gitignored PII), a prior-roster-shaped
-workbook keyed by Advocate Email. Fallbacks: Workday Region (col B) for C,
-`config.DEFAULT_FOREIGN_LANGUAGE` for M.
+uploaded source — they are maintained month to month in the **`ROSTER_BASIS`
+Snowflake table** keyed by Advocate Email. Fallbacks: Workday Region (col B) for
+C, `config.DEFAULT_FOREIGN_LANGUAGE` for M.
 
 Flow (`services/basis.py`):
 - `region_map()` / `language_map()` — {email: value} carried into `build_roster`
   via its `region_map=` / `language_map=` params (these win over `prior_month_df`).
-- `find_new_agents(roster)` — roster emails NOT in the basis. The review step
-  (`ui.components.collect_new_agent_basis`) prompts the user for their Region +
-  Language (Selectbox columns seeded from existing basis values; Region defaults
-  to the Workday region, Language to English).
-- `append_entries([...])` — writes confirmed new agents back into the basis
-  workbook (idempotent; skips known emails), so they are known next month.
+- `find_new_agents(roster, eligible_emails=)` — roster emails NOT in the basis,
+  restricted to Playvox/Agyle-eligible agents. The review step
+  (`ui.components.collect_new_agent_basis`) prompts for their Region + Language
+  (free-text TextColumns; Region defaults to the Workday region, Language to
+  English), with per-row **Validate** (save to basis) / **Disregard** (drop from
+  roster, e.g. promoted to manager) checkboxes.
+- `append_entries([...])` — inserts confirmed new agents (idempotent; skips known).
+- `upsert_entries([...])` — MERGE used by the corrections step: updates existing
+  emails AND inserts new ones; a blank incoming value never clobbers an existing one.
 
-The "💾 Save to basis" button in the app persists the entries; the in-memory
-roster is also patched so the current preview/export reflect them pre-rebuild.
-The exported formulas (core/refs.py) still VLOOKUP the prior-month roster tab as
-the live-sheet carry-forward, independent of the basis file.
+The "💾 Save to basis" button persists validated entries; the in-memory roster is
+also patched so the current preview/export reflect them pre-rebuild. The exported
+formulas (core/refs.py) still VLOOKUP the prior-month roster tab as the live-sheet
+carry-forward, independent of the basis table.
+
+## Export & corrections
+
+Two export formats (`services/export_xlsx.py`):
+- **`build_csv()` (primary)** — the roster with every column resolved to a VALUE.
+  Opens cleanly in Excel and Sheets. Use this for anything Excel touches.
+- **`build_workbook()` (advanced)** — the 3-tab formula workbook (below). Built for
+  Google Sheets; **Excel flags its Google-only formulas as corrupt and strips them**
+  on repair (this is why formula-driven cols like C and E came back blank in Excel —
+  the fix was the CSV path).
+
+The **corrections step** (`services/corrections.py`, app Step 7) ingests a
+previously-finalized roster (.csv or .xlsx, tolerant of header-on-row-6) and writes
+its Region in Explore + Language back to the basis via `upsert_entries`, plus any
+col-E Z2 names to the cache. This is how a manager's manual edits carry forward.
 
 ## Architecture (3 layers)
 
@@ -33,9 +64,10 @@ the live-sheet carry-forward, independent of the basis file.
 3. `streamlit_app.py` + `ui/` — the wizard UI. Keep logic out of the UI layer.
 
 **Principle:** explicit data flow. Functions take DataFrames/dicts and return them;
-no hidden session-state reads inside services. Streamlit installed: **1.58.0**.
-When touching Streamlit syntax, consult the bundled `developing-with-streamlit` skill
-(in the sibling `zdp-streamlit-starter-kit`) so you match the installed API.
+no hidden session-state reads inside services. Streamlit: **1.52.2 in the deployed
+SiS app** (pinned in `environment.yml`), newer locally. When touching Streamlit
+syntax, consult the bundled `developing-with-streamlit` skill (in the sibling
+`zdp-streamlit-starter-kit`) and avoid APIs newer than 1.52.
 
 ## Verified facts (don't re-derive — confirmed against live Snowflake)
 
@@ -55,9 +87,10 @@ When touching Streamlit syntax, consult the bundled `developing-with-streamlit` 
 
 All of these live in `core/config.py`. Change them there, not inline.
 
-## The output design (important)
+## The formula .xlsx design (the "advanced" export)
 
-The exported `.xlsx` has three tabs and is meant to be pasted into the live Google Sheet:
+The formula `.xlsx` has three tabs and is meant to be pasted into the live Google Sheet
+(the CSV is the default export — see "Export & corrections" above):
 - `<Month> <Year> Workday` and `<Month> <Year> Playvox Roster` — **values** (landing tabs).
 - `All Teams <Month> <Year>` — the roster. Columns **F** (email) and **N** (comment) are
   values; **everything else is a live Google formula** generated by `core/refs.py`, with
