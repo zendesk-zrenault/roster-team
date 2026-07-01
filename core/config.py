@@ -13,6 +13,12 @@ SCD2_CURRENT_SENTINEL = "9999-12-31 00:00:00.000"
 # Default Snowflake CLI connection name (overridable via st.secrets["dev"]).
 DEFAULT_CONNECTION_NAME = "premier_metrics"
 
+# Role the app runs under. The premier_metrics connection pins role=PUBLIC, which
+# cannot read/write the STREAMLIT_APPS.ADVOCACY_MONTHLY_ROSTER tables (reads return
+# NULL, writes corrupt). The tables are owned by STREAMLIT_APP_ADMIN_ROLE, which is
+# also the deployed SiS execution role — so use it locally too for consistency.
+APP_ROLE = "STREAMLIT_APP_ADMIN_ROLE"
+
 # Advocacy cost centers. Names drift over time ("280 Advocacy Core" -> "280 Core",
 # spacing variants on 285), so we filter on the NUMERIC PREFIX, never the full string.
 ADVOCACY_COST_CENTER_PREFIXES = ["277", "280", "285", "286", "287", "289"]
@@ -106,3 +112,11 @@ BASIS_TABLE = f"{PERSIST_DATABASE}.{PERSIST_SCHEMA}.ROSTER_BASIS"
 # Seeded from data/z2_names_list.csv (5,332 rows). Grows each month.
 # Columns: EMAIL VARCHAR, Z2_NAME VARCHAR.
 Z2_TABLE = f"{PERSIST_DATABASE}.{PERSIST_SCHEMA}.Z2_NAMES_CACHE"
+
+# Job-title classification: which Workday JOB_TITLEs are ticket-bearing. Only
+# ticket-bearing titles stay in the roster; Non-Ticket Bearing AND management
+# ("Ticket Bearing Mgmt") titles are dropped. Seeded from the repo CSV below and
+# grown when the user classifies a previously-unseen title during review.
+# Columns: JOB_TITLE VARCHAR, TICKET_BEARING BOOLEAN.
+JOB_TITLE_TABLE = f"{PERSIST_DATABASE}.{PERSIST_SCHEMA}.JOB_TITLE_CLASSIFICATION"
+JOB_TITLE_CSV = "data/job_title_classification.csv"

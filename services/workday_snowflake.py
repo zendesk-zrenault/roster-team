@@ -57,7 +57,14 @@ def get_session():
             )
         except Exception:
             pass
-        return Session.builder.config("connection_name", connection_name).create()
+        builder = Session.builder.config("connection_name", connection_name)
+        # The connection pins role=PUBLIC, which cannot read/write the app's
+        # STREAMLIT_APPS tables (reads come back NULL, writes corrupt). Override
+        # to the app owner role so local dev matches the deployed SiS session,
+        # which already runs as this role.
+        if config.APP_ROLE:
+            builder = builder.config("role", config.APP_ROLE)
+        return builder.create()
 
 
 def _cost_center_predicate() -> str:
@@ -95,6 +102,48 @@ def fetch_workday_roster(include_deleted: bool = False):
     if "EMAIL" in df.columns:
         df["EMAIL"] = df["EMAIL"].astype("string").str.strip().str.lower()
     return df
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_data_freshness():
+    """Return when the Workday SCD2 table was last refreshed (UTC).
+
+    Reads LAST_ALTERED from the database's INFORMATION_SCHEMA.TABLES — the last
+    time the table itself was rebuilt/altered, i.e. the true data-refresh time.
+    Falls back to MAX(_FIVETRAN_SYNCED) if INFORMATION_SCHEMA is unavailable.
+    Returns a pandas Timestamp (tz-aware UTC) or None on failure.
+    """
+    session = get_session()
+
+    # WORKDAY_TABLE = "DATABASE.SCHEMA.TABLE"
+    parts = config.WORKDAY_TABLE.split(".")
+    if len(parts) == 3:
+        database, schema, table = parts
+        info_query = (
+            f"SELECT LAST_ALTERED FROM {database}.INFORMATION_SCHEMA.TABLES "
+            f"WHERE LOWER(TABLE_SCHEMA) = '{schema.lower()}' "
+            f"AND LOWER(TABLE_NAME) = '{table.lower()}'"
+        )
+        try:
+            df = session.sql(info_query).to_pandas()
+            if not df.empty and df.iloc[0, 0] is not None:
+                return df.iloc[0, 0]
+        except Exception:
+            pass
+
+    # Fallback: the Fivetran per-row sync timestamp.
+    cc = _cost_center_predicate()
+    fallback = (
+        f"SELECT MAX(_FIVETRAN_SYNCED) AS LAST_SYNC "
+        f"FROM {config.WORKDAY_TABLE} "
+        f"WHERE VALID_TO_TIMESTAMP = '{config.SCD2_CURRENT_SENTINEL}' AND {cc}"
+    )
+    try:
+        df = session.sql(fallback).to_pandas()
+        val = df.iloc[0, 0]
+        return None if val is None else val
+    except Exception:
+        return None
 
 
 def test_connection() -> tuple[bool, str]:

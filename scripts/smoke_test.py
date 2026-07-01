@@ -44,8 +44,16 @@ def main() -> None:
     assert roster[email_col].is_unique, "duplicate emails survived dedup"
     print(f"✓ Roster built: {len(roster)} unique rows")
 
-    present, departed = split_departed(roster, set(wd["EMAIL"].dropna()))
-    unresolved = find_unresolved(roster)
+    # Job-title filter: drop non-ticket-bearing / management rows (CSV fallback).
+    from services import job_titles  # noqa: PLC0415
+    tb, ntb = job_titles.split_by_ticket_bearing(roster)
+    unknown = job_titles.unclassified_titles(roster)
+    assert len(tb) + len(ntb) == len(roster), (len(tb), len(ntb), len(roster))
+    print(f"✓ Job-title filter: {len(tb)} ticket-bearing kept, {len(ntb)} dropped, "
+          f"{len(unknown)} unclassified")
+
+    present, departed = split_departed(tb, set(wd["EMAIL"].dropna()))
+    unresolved = find_unresolved(tb)
     print(f"✓ Review split: present={len(present)} departed={len(departed)} unresolved={len(unresolved)}")
 
     data = build_workbook(roster, wd, pv, month_num=7, year=2026)
@@ -63,15 +71,21 @@ def main() -> None:
     wb.close()
     print(f"✓ Export (.xlsx): 3 tabs, formulas reference correct month tabs ({len(data):,} bytes)")
 
-    # CSV export: resolved values, no formulas, all 14 roster columns present.
-    csv_bytes = build_csv(roster)
-    csv_df = pd.read_csv(io.BytesIO(csv_bytes))
+    # CSV export: 5 banner rows, header on row 6, resolved values, no formulas.
+    csv_bytes = build_csv(roster, month_num=7, year=2026)
+    # header row is index 5 (0-based) after the 5 banner rows.
+    csv_df = pd.read_csv(io.BytesIO(csv_bytes), header=5, skip_blank_lines=False)
     assert list(csv_df.columns) == list(roster.columns), csv_df.columns.tolist()
     assert len(csv_df) == len(roster), (len(csv_df), len(roster))
     assert not csv_df.astype(str).apply(lambda c: c.str.startswith("=")).any().any(), (
         "CSV must contain resolved values, not formulas"
     )
-    print(f"✓ Export (.csv): {len(csv_df)} rows, 14 cols, no formulas ({len(csv_bytes):,} bytes)")
+    # No literal "nan" strings leaked into any cell.
+    assert not csv_df.astype(str).apply(lambda c: c.str.strip().str.lower() == "nan").any().any(), (
+        "CSV must not contain literal 'nan' strings"
+    )
+    print(f"✓ Export (.csv): 5 banner rows + header on row 6, {len(csv_df)} rows, "
+          f"no formulas/nan ({len(csv_bytes):,} bytes)")
 
     print("\nALL CHECKS PASSED")
 

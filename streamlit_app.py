@@ -15,13 +15,25 @@ live Google formulas with refs rewritten to the new month's tabs.
 
 import datetime
 
+import pandas as pd
 import streamlit as st
 
 from core import config, lookups, refs
-from services import basis, corrections, export_xlsx, roster_builder, zendesk_names
+from services import (
+    basis,
+    corrections,
+    export_xlsx,
+    job_titles,
+    roster_builder,
+    zendesk_names,
+)
 from services.playvox import load_playvox_csv
 from services.workday_file import load_workday_file
-from services.workday_snowflake import fetch_workday_roster, test_connection
+from services.workday_snowflake import (
+    fetch_data_freshness,
+    fetch_workday_roster,
+    test_connection,
+)
 from ui import components
 
 st.set_page_config(page_title="Team Roster Builder", page_icon="📋", layout="wide")
@@ -34,6 +46,10 @@ st.session_state.setdefault("workday_df", None)
 st.session_state.setdefault("workday_source", None)
 st.session_state.setdefault("playvox", None)
 st.session_state.setdefault("roster", None)
+# New-agent review actions accumulated across reruns (list can be long, so the
+# user can process it in several passes). validated_basis: {email: {region, language}}.
+st.session_state.setdefault("validated_basis", {})
+st.session_state.setdefault("disregarded_emails", set())
 
 st.title("📋 Monthly Team Roster Builder")
 st.caption(
@@ -72,6 +88,32 @@ source = st.radio(
 )
 
 if source.startswith("Snowflake"):
+    # Show how fresh the Snowflake data is so you can judge whether to trust the
+    # live pull or upload a more recent Workday XLS instead.
+    last_sync = fetch_data_freshness()
+    if last_sync is not None:
+        # Normalise to tz-naive UTC (LAST_ALTERED is tz-aware; the Fivetran
+        # fallback is tz-naive) so the age subtraction always works.
+        synced = pd.Timestamp(last_sync)
+        synced = synced.tz_convert(None) if synced.tzinfo is not None else synced
+        now = pd.Timestamp.utcnow().tz_localize(None)
+        age_hours = (now - synced) / pd.Timedelta(hours=1)
+        stamp = synced.strftime("%Y-%m-%d %H:%M UTC")
+        if age_hours <= 36:
+            st.success(f"🟢 Snowflake Workday data last refreshed **{stamp}** (~{age_hours:.0f}h ago).")
+        elif age_hours <= 24 * 7:
+            st.warning(
+                f"🟡 Snowflake Workday data last refreshed **{stamp}** "
+                f"(~{age_hours / 24:.1f} days ago). Consider uploading a fresher Workday XLS."
+            )
+        else:
+            st.error(
+                f"🔴 Snowflake Workday data is stale — last refreshed **{stamp}** "
+                f"(~{age_hours / 24:.0f} days ago). Upload a current Workday XLS instead."
+            )
+    else:
+        st.caption("Could not read the Snowflake refresh timestamp.")
+
     if st.button("Query Workday from Snowflake", type="primary"):
         ok, msg = test_connection()
         if not ok:
@@ -133,6 +175,9 @@ elif st.button("Build roster", type="primary"):
         region_map=basis.region_map(),
         language_map=basis.language_map(),
     )
+    # Fresh build → reset the accumulated new-agent review actions.
+    st.session_state.validated_basis = {}
+    st.session_state.disregarded_emails = set()
 
 # === Step 5 & 6: Review + Export ============================================
 if st.session_state.roster is not None:
@@ -140,16 +185,75 @@ if st.session_state.roster is not None:
     wd = st.session_state.workday_df
     active_emails = set(wd["EMAIL"].dropna())
 
+    st.header("5 · Review")
+
+    # --- Job-title gate: drop non-ticket-bearing rows; classify unknown titles --
+    # Any title not marked ticket-bearing (incl. management) is removed. Titles the
+    # classification table has never seen are surfaced for the user to classify.
+    unknown_titles = job_titles.unclassified_titles(roster)
+    if unknown_titles:
+        st.subheader("New job titles — confirm ticket-bearing")
+        st.warning(
+            f"{len(unknown_titles)} job title(s) aren't in the classification list. "
+            "Mark each as **Ticket bearing** (stays on the roster) or leave unticked "
+            "for non-ticket-bearing / management (removed). Saved for next month."
+        )
+        jt_df = pd.DataFrame({"Job title": unknown_titles, "Ticket bearing": False})
+        jt_edited = st.data_editor(
+            jt_df,
+            key="job_title_editor",
+            hide_index=True,
+            disabled=["Job title"],
+            column_config={
+                "Ticket bearing": st.column_config.CheckboxColumn(
+                    "Ticket bearing", default=False,
+                    help="Tick if this role handles tickets (stays on the roster)",
+                ),
+            },
+        )
+        if st.button("Save job-title classifications", type="primary"):
+            entries = [
+                {"title": r["Job title"], "ticket_bearing": bool(r["Ticket bearing"])}
+                for _, r in jt_edited.iterrows()
+            ]
+            n = job_titles.add_classifications(entries)
+            job_titles.load_classification.clear()
+            st.success(f"Saved {n} classification(s). Applying to the roster…")
+            st.rerun()
+        st.info("Classify the titles above and save before continuing the review.")
+        st.stop()
+
+    # All titles known → keep only ticket-bearing rows.
+    roster, dropped_ntb = job_titles.split_by_ticket_bearing(roster)
+
     present, departed = roster_builder.split_departed(roster, active_emails)
     unresolved = roster_builder.find_unresolved(roster)
     # Only confirm agents present in the Agyle/Playvox roster (valid business role).
     playvox_emails = set(st.session_state.playvox.kept["Email address"].dropna())
-    new_agents = basis.find_new_agents(roster, eligible_emails=playvox_emails)
+    all_new_agents = basis.find_new_agents(roster, eligible_emails=playvox_emails)
 
-    st.header("5 · Review")
+    # Already-processed rows (validated or disregarded in a previous pass) drop off
+    # the list so a long list can be worked through in several passes.
+    processed = set(st.session_state.validated_basis) | st.session_state.disregarded_emails
+    new_agents = all_new_agents[
+        ~all_new_agents[components.EMAIL_COL].isin(processed)
+    ].reset_index(drop=True)
+
     components.summary_metrics(roster, len(present), len(departed), len(unresolved))
+    if len(dropped_ntb):
+        st.caption(
+            f"Removed {len(dropped_ntb)} non-ticket-bearing / management row(s) "
+            "by job title."
+        )
 
     st.subheader("New agents — confirm Region in Explore + Language")
+    done = len(processed)
+    if done:
+        st.caption(
+            f"Processed so far this session: {len(st.session_state.validated_basis)} "
+            f"validated, {len(st.session_state.disregarded_emails)} disregarded. "
+            f"{len(new_agents)} still to review."
+        )
     new_result = components.collect_new_agent_basis(
         new_agents,
         region_options=basis.existing_regions(),
@@ -158,12 +262,22 @@ if st.session_state.roster is not None:
     )
     validated = new_result["validated"]
     disregarded = new_result["disregarded"]
-    if st.button(
-        f"💾 Save {len(validated)} validated entry(ies) to the basis file",
-        disabled=not validated,
-    ):
-        added = basis.append_entries(validated)
-        st.success(f"Saved {added} new agent(s) to the basis. Rebuild to apply.")
+
+    apply_label = (
+        f"✅ Apply selections — save {len(validated)} to basis, "
+        f"drop {len(disregarded)} disregarded"
+    )
+    if st.button(apply_label, disabled=not (validated or disregarded), type="primary"):
+        added = basis.append_entries(validated) if validated else 0
+        # Accumulate across passes so processed rows disappear and multi-step works.
+        for e in validated:
+            st.session_state.validated_basis[e["email"]] = e
+        st.session_state.disregarded_emails |= disregarded
+        st.success(
+            f"Applied: saved {added} to the basis, dropped {len(disregarded)} "
+            f"from the roster. Remaining rows updated below."
+        )
+        st.rerun()
 
     st.subheader("Departed / absent agents")
     to_delete = components.review_departed(departed, key="departed_editor")
@@ -172,10 +286,10 @@ if st.session_state.roster is not None:
     components.review_unresolved(unresolved, key="unresolved_editor")
 
     # Apply this session's validated new-agent region/language to the in-memory
-    # roster so the preview/export reflect them even before a rebuild.
+    # roster so the preview/export reflect them (accumulated across passes).
     region_col = config.ROSTER_COLUMNS["C"]
     language_col = config.ROSTER_COLUMNS["M"]
-    overrides = {e["email"]: e for e in validated}
+    overrides = dict(st.session_state.validated_basis)
     if overrides:
         emask = roster[components.EMAIL_COL].isin(overrides)
         roster.loc[emask, region_col] = roster.loc[emask, components.EMAIL_COL].map(
@@ -187,10 +301,52 @@ if st.session_state.roster is not None:
 
     # Remove departed/absent (ticked above) AND disregarded new agents (e.g. now
     # a manager) from the final roster.
-    drop_emails = set(to_delete) | disregarded
+    drop_emails = set(to_delete) | st.session_state.disregarded_emails
     final = roster[~roster[components.EMAIL_COL].isin(drop_emails)].reset_index(drop=True)
 
-    st.header("6 · Export")
+    # === Step 6: Apply corrections from a finalized month ===================
+    st.header("6 · Apply corrections (optional)")
+    st.caption(
+        "Upload a previously-finalized roster. Corrected values are written back "
+        "to the basis so they carry forward into next month's build."
+    )
+    corr_file = st.file_uploader(
+        "Corrected roster (.csv or .xlsx)", type=["csv", "xlsx"], key="corrections_uploader"
+    )
+    if corr_file is not None:
+        try:
+            corr_df = corrections.load_corrected_roster(corr_file)
+            st.success(f"Read {len(corr_df):,} rows from the corrected roster.")
+            with st.expander("Preview corrected roster"):
+                st.dataframe(corr_df, hide_index=True)
+            if st.button("Apply corrections to the basis", type="primary"):
+                r = corrections.apply_corrections(corr_df)
+                basis.load_basis.clear()
+                lookups.load_z2_cache.clear()
+
+                changed = r["new_agents"] + r["region_changed"] + r["language_changed"]
+                if changed == 0 and r["z2_added"] == 0:
+                    st.info(
+                        "No changes — every value in the uploaded roster already "
+                        "matches the basis. Nothing to carry forward."
+                    )
+                else:
+                    st.success(
+                        "✅ Corrections applied to the basis "
+                        "(they'll carry into next month's build). Here's what changed:"
+                    )
+                    st.markdown(
+                        f"- **{r['new_agents']}** new agent(s) added\n"
+                        f"- **{r['region_changed']}** Region in Explore value(s) changed\n"
+                        f"- **{r['language_changed']}** Language value(s) changed\n"
+                        f"- {r['unchanged']} agent(s) already matched (no change)\n"
+                        f"- **{r['z2_added']}** Z2 display name(s) added to the cache"
+                    )
+        except ValueError as exc:
+            st.error(str(exc))
+
+    # === Step 7: Export =====================================================
+    st.header("7 · Export")
     st.write(
         f"Final roster: **{len(final):,}** rows "
         f"(removed {len(to_delete)} departed/absent, {len(disregarded)} disregarded)."
@@ -198,11 +354,12 @@ if st.session_state.roster is not None:
 
     # CSV holds the fully-resolved values (Z2 name, Region in Explore, manager,
     # etc.) — opens cleanly in Excel and Google Sheets. This is the primary export.
-    csv_data = export_xlsx.build_csv(final)
+    csv_data = export_xlsx.build_csv(final, month, year)
+    csv_name = export_xlsx.output_csv_filename(month, year)
     st.download_button(
         "⬇️ Download roster (.csv)",
         data=csv_data,
-        file_name=export_xlsx.output_csv_filename(month, year),
+        file_name=csv_name,
         mime="text/csv",
         type="primary",
     )
@@ -224,37 +381,10 @@ if st.session_state.roster is not None:
     with st.expander("Final roster preview"):
         st.dataframe(final, hide_index=True)
 
-# === Step 7: Apply corrections from a finalized month =======================
-st.header("7 · Apply corrections (optional)")
-st.caption(
-    "Upload a previously-finalized roster. Corrected will be written back to the "
-    "basis file so they carry forward into next month's build."
-)
-corr_file = st.file_uploader(
-    "Corrected roster (.csv or .xlsx)", type=["csv", "xlsx"], key="corrections_uploader"
-)
-if corr_file is not None:
-    try:
-        corr_df = corrections.load_corrected_roster(corr_file)
-        st.success(f"Read {len(corr_df):,} rows from the corrected roster.")
-        with st.expander("Preview corrected roster"):
-            st.dataframe(corr_df, hide_index=True)
-        if st.button("Apply corrections to the basis", type="primary"):
-            result = corrections.apply_corrections(corr_df)
-            st.success(
-                f"Basis updated: {result['basis_inserted']} added, "
-                f"{result['basis_updated']} updated. "
-                f"Z2 names: {result['z2_added']} added."
-            )
-            basis.load_basis.clear()
-            lookups.load_z2_cache.clear()
-    except ValueError as exc:
-        st.error(str(exc))
-
 st.divider()
 try:
     st.caption(f"Z2 name cache: {len(lookups.load_z2_cache()):,} email→name pairs.")
 except Exception:
     pass
-st.caption("App last updated: 2026-06-19 19:08 UTC")
+st.caption("App last updated: 2026-07-01 15:43 UTC")
 st.caption("For more information contact zrenault@zendesk.com")

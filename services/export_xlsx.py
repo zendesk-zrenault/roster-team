@@ -14,6 +14,7 @@ The roster header sits on row 6, data starts on row 7 (matching the live sheet),
 so a user can paste any tab straight in.
 """
 
+import csv
 import datetime
 import io
 
@@ -48,24 +49,68 @@ def _clean_csv(value):
             return value.item()
         except (ValueError, AttributeError):
             pass
+    # Guard against a literal "nan"/"none" string that slipped in upstream.
+    if isinstance(value, str) and value.strip().lower() in ("nan", "none", "nat"):
+        return ""
     return value
 
 
-def build_csv(roster_df) -> bytes:
+_MANAGER_INSTRUCTIONS = (
+    "Monthly Manager Validation Instructions\n"
+    "- Validate all columns for your team are complete and accurate. "
+    "Comment in the sheet and tag Giuseppe Eustaquio with any errors\n"
+    "- Special attention to Column E (Advocate Z2 name) - update cell directly "
+    "if advocate's Z2 name is different from column D\n"
+    "- [Core Managers Only] Special attention to Column K (Role) - update cell "
+    "directly if role type is different"
+)
+
+
+def _banner_rows(month_num: int, year: int) -> list[list[str]]:
+    """The 5 banner rows that sit above the A..N header in the live sheet.
+
+    Header lands on row 6 / data on row 7, matching config.ROSTER_HEADER_ROW.
+    Row 3 carries the manager instructions; row 5 the update-date labels
+    (Sheet Updated Date pre-filled to the 1st of the month; the Workday "Week of"
+    and Explore date are left blank to fill in the sheet).
+    """
+    sheet_updated = f"{refs.month_name(month_num)} 1, {year}"
+    return [
+        [],
+        [],
+        ["", _MANAGER_INSTRUCTIONS],
+        [],
+        ["", "Workday Source: ", "", "Sheet Updated Date", sheet_updated,
+         "Explore Updated Date:", ""],
+    ]
+
+
+def build_csv(roster_df, month_num: int, year: int) -> bytes:
     """Return the resolved roster (A..N, real values) as CSV bytes.
 
-    Unlike the formula-based .xlsx, this holds the actual resolved values
-    (Z2 name, Region in Explore, manager, etc.), so it opens cleanly in Excel
-    and Google Sheets alike. utf-8-sig so Excel detects UTF-8.
+    Holds actual resolved values (Z2 name, Region in Explore, manager, etc.), so
+    it opens cleanly in Excel and Google Sheets. Prefixed with the 5 banner rows
+    from the live sheet (instructions + update-date labels) so the header lands
+    on row 6 / data on row 7 — paste-ready into the roster doc. utf-8-sig so
+    Excel detects UTF-8.
     """
     df = roster_df.reindex(columns=list(config.ROSTER_COLUMNS.values())).copy()
     for col in df.columns:
         df[col] = df[col].map(_clean_csv)
-    return df.to_csv(index=False).encode("utf-8-sig")
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    for row in _banner_rows(month_num, year):
+        writer.writerow(row)
+    writer.writerow(list(config.ROSTER_COLUMNS.values()))  # header on row 6
+    for record in df.itertuples(index=False, name=None):
+        writer.writerow(record)
+    return buffer.getvalue().encode("utf-8-sig")
 
 
 def output_csv_filename(month_num: int, year: int) -> str:
-    return f"Roster_{refs.month_name(month_num)}_{year}.csv"
+    # Matches the Google Sheet tab naming, e.g. "All Teams [July 2026].csv".
+    return f"All Teams [{refs.month_name(month_num)} {year}].csv"
 
 
 def _clean(value):

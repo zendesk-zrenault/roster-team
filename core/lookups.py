@@ -48,12 +48,20 @@ def append_z2_names(new_pairs: dict[str, str]) -> int:
     if not new_pairs:
         return 0
 
+    def _clean(v) -> str:
+        if v is None or (not isinstance(v, str) and pd.isna(v)):
+            return ""
+        s = str(v).strip()
+        return "" if s.lower() in ("nan", "none", "nat") else s
+
     have = set(load_z2_cache()["Email"])
-    rows = [
-        (email.strip().lower(), str(name).strip())
-        for email, name in new_pairs.items()
-        if email and name and email.strip().lower() not in have
-    ]
+    rows = []
+    for email, name in new_pairs.items():
+        e = _clean(email).lower()
+        n = _clean(name)
+        # Skip blank names — a missing Z2 name must never be stored as "nan".
+        if e and n and e not in have:
+            rows.append((e, n))
     if not rows:
         return 0
 

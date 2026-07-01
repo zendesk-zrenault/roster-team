@@ -19,6 +19,7 @@ warnings.filterwarnings("ignore")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pandas as pd  # noqa: E402
+from snowflake.connector.pandas_tools import write_pandas  # noqa: E402
 from snowflake.snowpark import Session  # noqa: E402
 
 from core import config  # noqa: E402
@@ -27,25 +28,33 @@ WORKDAY_COLS = config.ROSTER_COLUMNS  # letter -> label
 
 BASIS_FILE = Path("data/basis_region_language.xlsx")
 Z2_FILE = Path("data/z2_names_list.csv")
+JOB_TITLE_FILE = Path(config.JOB_TITLE_CSV)
 
 EMAIL_COL = config.ROSTER_COLUMNS["F"]
 REGION_COL = config.ROSTER_COLUMNS["C"]
 LANG_COL = config.ROSTER_COLUMNS["M"]
 
+# CREATE OR REPLACE (not IF NOT EXISTS) — a prior run left a table whose rows read
+# back as all-NULL even for literal INSERTs; recreating cleanly fixes it. Plain
+# VARCHAR columns, no PK constraint (Snowflake doesn't enforce it and it complicated
+# the seed write). Seeding uses write_pandas, which is reliable here.
 DDL = f"""
 CREATE SCHEMA IF NOT EXISTS {config.PERSIST_DATABASE}.{config.PERSIST_SCHEMA};
 
-CREATE TABLE IF NOT EXISTS {config.BASIS_TABLE} (
-    EMAIL     VARCHAR NOT NULL,
+CREATE OR REPLACE TABLE {config.BASIS_TABLE} (
+    EMAIL          VARCHAR,
     REGION_EXPLORE VARCHAR,
-    LANGUAGE  VARCHAR,
-    CONSTRAINT pk_basis PRIMARY KEY (EMAIL)
+    LANGUAGE       VARCHAR
 );
 
-CREATE TABLE IF NOT EXISTS {config.Z2_TABLE} (
-    EMAIL    VARCHAR NOT NULL,
-    Z2_NAME  VARCHAR,
-    CONSTRAINT pk_z2 PRIMARY KEY (EMAIL)
+CREATE OR REPLACE TABLE {config.Z2_TABLE} (
+    EMAIL    VARCHAR,
+    Z2_NAME  VARCHAR
+);
+
+CREATE OR REPLACE TABLE {config.JOB_TITLE_TABLE} (
+    JOB_TITLE      VARCHAR,
+    TICKET_BEARING BOOLEAN
 );
 """
 
@@ -76,10 +85,14 @@ def _seed_basis(session: Session) -> int:
     df[EMAIL_COL] = df[EMAIL_COL].str.strip().str.lower()
     df = df[df[EMAIL_COL] != ""].drop_duplicates(subset=EMAIL_COL, keep="last")
 
-    sp_df = session.create_dataframe(
-        df.rename(columns={EMAIL_COL: "EMAIL", REGION_COL: "REGION_EXPLORE", LANG_COL: "LANGUAGE"})
+    out = df.rename(
+        columns={EMAIL_COL: "EMAIL", REGION_COL: "REGION_EXPLORE", LANG_COL: "LANGUAGE"}
     )
-    sp_df.write.mode("overwrite").save_as_table(config.BASIS_TABLE)
+    write_pandas(
+        session._conn._conn, out, "ROSTER_BASIS",
+        schema=config.PERSIST_SCHEMA, database=config.PERSIST_DATABASE,
+        quote_identifiers=False,
+    )
     return len(df)
 
 
@@ -99,8 +112,32 @@ def _seed_z2(session: Session) -> int:
     df["Email"] = df["Email"].str.strip().str.lower()
     df = df[df["Email"] != ""].drop_duplicates(subset="Email", keep="last")
 
-    sp_df = session.create_dataframe(df.rename(columns={"Email": "EMAIL", "Z2 Name": "Z2_NAME"}))
-    sp_df.write.mode("overwrite").save_as_table(config.Z2_TABLE)
+    out = df.rename(columns={"Email": "EMAIL", "Z2 Name": "Z2_NAME"})
+    write_pandas(
+        session._conn._conn, out, "Z2_NAMES_CACHE",
+        schema=config.PERSIST_SCHEMA, database=config.PERSIST_DATABASE,
+        quote_identifiers=False,
+    )
+    return len(df)
+
+
+def _seed_job_titles(session: Session) -> int:
+    if not JOB_TITLE_FILE.exists():
+        print(f"  ⚠️  {JOB_TITLE_FILE} not found — skipping job-title seed")
+        return 0
+
+    df = pd.read_csv(JOB_TITLE_FILE, dtype=str).fillna("")
+    df.columns = [str(c).strip() for c in df.columns]
+    df = df[["JOB_TITLE", "TICKET_BEARING"]].copy()
+    df["JOB_TITLE"] = df["JOB_TITLE"].str.strip()
+    df = df[df["JOB_TITLE"] != ""].drop_duplicates(subset="JOB_TITLE", keep="last")
+    df["TICKET_BEARING"] = df["TICKET_BEARING"].str.strip().str.upper() == "TRUE"
+
+    write_pandas(
+        session._conn._conn, df, "JOB_TITLE_CLASSIFICATION",
+        schema=config.PERSIST_SCHEMA, database=config.PERSIST_DATABASE,
+        quote_identifiers=False,
+    )
     return len(df)
 
 
@@ -121,6 +158,10 @@ def main() -> None:
     print("\nSeeding Z2 names cache…")
     n = _seed_z2(session)
     print(f"  ✓ {n} rows written to {config.Z2_TABLE}")
+
+    print("\nSeeding job-title classification…")
+    n = _seed_job_titles(session)
+    print(f"  ✓ {n} rows written to {config.JOB_TITLE_TABLE}")
 
     print("\nDone. Run scripts/smoke_test.py to verify, then deploy with:")
     print(
