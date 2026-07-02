@@ -43,9 +43,14 @@ def load_classification() -> pd.DataFrame:
         df = session.sql(
             f"SELECT JOB_TITLE, TICKET_BEARING FROM {config.JOB_TITLE_TABLE}"
         ).to_pandas()
+        # Drop null/blank titles. If the table is empty or comes back all-NULL (a
+        # known privilege/corruption artifact), fall through to the CSV seed rather
+        # than treating every title as "new".
         if not df.empty:
-            df["TICKET_BEARING"] = df["TICKET_BEARING"].astype(bool)
-            return df
+            df = df[df["JOB_TITLE"].notna() & (df["JOB_TITLE"].astype(str).str.strip() != "")]
+            if not df.empty:
+                df["TICKET_BEARING"] = df["TICKET_BEARING"].astype(bool)
+                return df.reset_index(drop=True)
     except Exception:
         pass
 
