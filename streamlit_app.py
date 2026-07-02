@@ -398,7 +398,7 @@ if st.session_state.roster is not None:
 
     # CSV holds the fully-resolved values (Z2 name, Region in Explore, manager,
     # etc.) — opens cleanly in Excel and Google Sheets. This is the primary export.
-    csv_data = export_xlsx.build_csv(final, month, year)
+    csv_data = export_xlsx.build_csv(final, month, year, created_date=datetime.date.today())
     csv_name = export_xlsx.output_csv_filename(month, year)
     st.download_button(
         "⬇️ Download roster (.csv)",
@@ -430,5 +430,5 @@ try:
     st.caption(f"Z2 name cache: {len(lookups.load_z2_cache()):,} email→name pairs.")
 except Exception:
     pass
-st.caption("App last updated: 2026-07-02 10:16 UTC")
+st.caption("App last updated: 2026-07-02 11:09 UTC")
 st.caption("For more information contact zrenault@zendesk.com")

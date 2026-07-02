@@ -7,6 +7,7 @@ invariants verified during planning. Run:
     .venv/bin/python scripts/smoke_test.py
 """
 
+import csv
 import io
 import sys
 import warnings
@@ -72,7 +73,12 @@ def main() -> None:
     print(f"✓ Export (.xlsx): 3 tabs, formulas reference correct month tabs ({len(data):,} bytes)")
 
     # CSV export: 5 banner rows, header on row 6, resolved values, no formulas.
-    csv_bytes = build_csv(roster, month_num=7, year=2026)
+    import datetime as _dt  # noqa: PLC0415
+    csv_bytes = build_csv(roster, month_num=7, year=2026, created_date=_dt.date(2026, 7, 1))
+    # Banner: B5 (row idx 4, col idx 1) empty; E5 (col idx 4) = creation date.
+    banner = list(csv.reader(io.StringIO(csv_bytes.decode("utf-8-sig"))))
+    assert banner[4][1] == "", f"B5 should be empty, got {banner[4][1]!r}"
+    assert banner[4][4] == "July 1, 2026", f"E5 should be date, got {banner[4][4]!r}"
     # header row is index 5 (0-based) after the 5 banner rows.
     csv_df = pd.read_csv(io.BytesIO(csv_bytes), header=5, skip_blank_lines=False)
     assert list(csv_df.columns) == list(roster.columns), csv_df.columns.tolist()
@@ -84,8 +90,14 @@ def main() -> None:
     assert not csv_df.astype(str).apply(lambda c: c.str.strip().str.lower() == "nan").any().any(), (
         "CSV must not contain literal 'nan' strings"
     )
-    print(f"✓ Export (.csv): 5 banner rows + header on row 6, {len(csv_df)} rows, "
-          f"no formulas/nan ({len(csv_bytes):,} bytes)")
+    # Sorted by Manager (I) then Role (K).
+    mgr, role = csv_df.columns[8], csv_df.columns[10]
+    keys = list(
+        zip(csv_df[mgr].fillna("").str.lower(), csv_df[role].fillna("").str.lower(), strict=False)
+    )
+    assert keys == sorted(keys), "CSV rows must be sorted by Manager then Role"
+    print(f"✓ Export (.csv): banner (B5 empty, E5 date), sorted by Manager+Role, "
+          f"{len(csv_df)} rows, no formulas/nan ({len(csv_bytes):,} bytes)")
 
     print("\nALL CHECKS PASSED")
 
