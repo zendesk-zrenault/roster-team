@@ -50,6 +50,9 @@ st.session_state.setdefault("roster", None)
 # user can process it in several passes). validated_basis: {email: {region, language}}.
 st.session_state.setdefault("validated_basis", {})
 st.session_state.setdefault("disregarded_emails", set())
+# Titles the user marked ticket-bearing THIS session in the deployed app (where
+# the choice can't be persisted to the shared list). Set of normalised titles.
+st.session_state.setdefault("session_ticket_bearing", set())
 
 st.title("📋 Monthly Team Roster Builder")
 st.caption(
@@ -178,6 +181,7 @@ elif st.button("Build roster", type="primary"):
     # Fresh build → reset the accumulated new-agent review actions.
     st.session_state.validated_basis = {}
     st.session_state.disregarded_emails = set()
+    st.session_state.session_ticket_bearing = set()
 
 # === Step 5 & 6: Review + Export ============================================
 if st.session_state.roster is not None:
@@ -189,15 +193,33 @@ if st.session_state.roster is not None:
 
     # --- Job-title gate: drop non-ticket-bearing rows; classify unknown titles --
     # Any title not marked ticket-bearing (incl. management) is removed. Titles the
-    # classification table has never seen are surfaced for the user to classify.
-    unknown_titles = job_titles.unclassified_titles(roster)
+    # shared list has never seen are surfaced for the user to classify. Titles
+    # classified ticket-bearing earlier this session (deployed app) still count.
+    deployed = job_titles.is_deployed()
+    unknown_titles = [
+        t for t in job_titles.unclassified_titles(roster)
+        if job_titles._norm(t) not in st.session_state.session_ticket_bearing
+    ]
     if unknown_titles:
         st.subheader("New job titles — confirm ticket-bearing")
         st.warning(
             f"{len(unknown_titles)} job title(s) aren't in the classification list. "
             "Mark each as **Ticket bearing** (stays on the roster) or leave unticked "
-            "for non-ticket-bearing / management (removed). Saved for next month."
+            "for non-ticket-bearing / management (removed)."
         )
+        if deployed:
+            st.info(
+                "ℹ️ **Deployed app:** these classifications apply to **this month "
+                "only** — this app can't update the shared list. To make them "
+                "permanent for everyone, add them in the **local app** (which "
+                "commits the updated list to GitHub), then redeploy."
+            )
+        else:
+            st.caption(
+                "Local app: saving updates the shared list "
+                "(`data/job_title_classification.csv`), records an audit entry, and "
+                "pushes to GitHub — so the deployed app gets them on the next redeploy."
+            )
         jt_df = pd.DataFrame({"Job title": unknown_titles, "Ticket bearing": False})
         jt_edited = st.data_editor(
             jt_df,
@@ -211,20 +233,35 @@ if st.session_state.roster is not None:
                 ),
             },
         )
-        if st.button("Save job-title classifications", type="primary"):
+        save_label = (
+            "Apply for this month" if deployed
+            else "Save & push job-title classifications"
+        )
+        if st.button(save_label, type="primary"):
             entries = [
                 {"title": r["Job title"], "ticket_bearing": bool(r["Ticket bearing"])}
                 for _, r in jt_edited.iterrows()
             ]
-            n = job_titles.add_classifications(entries)
+            # Always remember this session's ticket-bearing picks so the gate clears.
+            for e in entries:
+                if e["ticket_bearing"]:
+                    st.session_state.session_ticket_bearing.add(job_titles._norm(e["title"]))
+            result = job_titles.add_classifications(entries)
             job_titles.load_classification.clear()
-            st.success(f"Saved {n} classification(s). Applying to the roster…")
+            if result["deployed"]:
+                st.info(result["message"])
+            elif result["pushed"]:
+                st.success(result["message"])
+            else:
+                st.warning(result["message"])
             st.rerun()
         st.info("Classify the titles above and save before continuing the review.")
         st.stop()
 
-    # All titles known → keep only ticket-bearing rows.
-    roster, dropped_ntb = job_titles.split_by_ticket_bearing(roster)
+    # All titles known → keep only ticket-bearing rows (plus this session's picks).
+    roster, dropped_ntb = job_titles.split_by_ticket_bearing(
+        roster, extra_ticket_bearing=st.session_state.session_ticket_bearing
+    )
 
     present, departed = roster_builder.split_departed(roster, active_emails)
     unresolved = roster_builder.find_unresolved(roster)
@@ -386,5 +423,5 @@ try:
     st.caption(f"Z2 name cache: {len(lookups.load_z2_cache()):,} email→name pairs.")
 except Exception:
     pass
-st.caption("App last updated: 2026-07-01 15:43 UTC")
+st.caption("App last updated: 2026-07-02 10:16 UTC")
 st.caption("For more information contact zrenault@zendesk.com")

@@ -3,6 +3,25 @@
 This app automates the monthly Advocacy team-roster build. Read this before
 editing; it captures the verified facts and the non-obvious design decisions.
 
+## Two app modes (LOCAL vs DEPLOYED) — job-title list
+
+There are **two running copies** of this app, and they differ in one way: whether
+they can update the shared **job-title classification list**
+(`data/job_title_classification.csv`, bundled into the deploy; read by both apps).
+
+- **LOCAL app** (your machine, writable repo): validating a new job title updates
+  the CSV, appends to `data/job_title_audit_log.csv`, and **auto commits + pushes
+  to GitHub `main`** (see `services/job_titles.py:_git_commit_push`). Redeploy to
+  push those titles into the deployed app.
+- **DEPLOYED app** (Streamlit in Snowflake, read-only container): validating a new
+  title applies for the **current session/month only** — it cannot write the repo.
+  The UI says so. `job_titles.is_deployed()` distinguishes the two (active Snowpark
+  session ⇒ deployed).
+
+The list is the SINGLE source of truth for the ticket-bearing filter — no Snowflake
+table. Only pure "Ticket Bearing" titles stay; Non-Ticket Bearing AND management
+("Ticket Bearing Mgmt") are dropped.
+
 ## Deployment & persistence (Snowflake-backed)
 
 The app is deployed to **Streamlit in Snowflake (SiS)**, not a local-only tool.

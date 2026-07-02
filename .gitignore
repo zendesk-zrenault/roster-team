@@ -6,9 +6,10 @@ output/
 *.xlsx
 *.csv
 !samples/.gitkeep
-# Job-title classification is reference data (no PII) — keep it in the repo as
-# the seed for the Snowflake JOB_TITLE_CLASSIFICATION table.
+# Job-title classification + its audit log are reference data (no PII) — the
+# version-controlled source of truth read by both apps and bundled into the deploy.
 !data/job_title_classification.csv
+!data/job_title_audit_log.csv
 
 # --- Secrets ---
 .streamlit/secrets.toml

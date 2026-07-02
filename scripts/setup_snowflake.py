@@ -28,7 +28,6 @@ WORKDAY_COLS = config.ROSTER_COLUMNS  # letter -> label
 
 BASIS_FILE = Path("data/basis_region_language.xlsx")
 Z2_FILE = Path("data/z2_names_list.csv")
-JOB_TITLE_FILE = Path(config.JOB_TITLE_CSV)
 
 EMAIL_COL = config.ROSTER_COLUMNS["F"]
 REGION_COL = config.ROSTER_COLUMNS["C"]
@@ -51,12 +50,10 @@ CREATE OR REPLACE TABLE {config.Z2_TABLE} (
     EMAIL    VARCHAR,
     Z2_NAME  VARCHAR
 );
-
-CREATE OR REPLACE TABLE {config.JOB_TITLE_TABLE} (
-    JOB_TITLE      VARCHAR,
-    TICKET_BEARING BOOLEAN
-);
 """
+# Note: job-title classification is NOT a Snowflake table — it lives in the
+# version-controlled CSV data/job_title_classification.csv, bundled into the
+# deployed app and read by both apps directly.
 
 
 def _get_session() -> Session:
@@ -121,26 +118,6 @@ def _seed_z2(session: Session) -> int:
     return len(df)
 
 
-def _seed_job_titles(session: Session) -> int:
-    if not JOB_TITLE_FILE.exists():
-        print(f"  ⚠️  {JOB_TITLE_FILE} not found — skipping job-title seed")
-        return 0
-
-    df = pd.read_csv(JOB_TITLE_FILE, dtype=str).fillna("")
-    df.columns = [str(c).strip() for c in df.columns]
-    df = df[["JOB_TITLE", "TICKET_BEARING"]].copy()
-    df["JOB_TITLE"] = df["JOB_TITLE"].str.strip()
-    df = df[df["JOB_TITLE"] != ""].drop_duplicates(subset="JOB_TITLE", keep="last")
-    df["TICKET_BEARING"] = df["TICKET_BEARING"].str.strip().str.upper() == "TRUE"
-
-    write_pandas(
-        session._conn._conn, df, "JOB_TITLE_CLASSIFICATION",
-        schema=config.PERSIST_SCHEMA, database=config.PERSIST_DATABASE,
-        quote_identifiers=False,
-    )
-    return len(df)
-
-
 def main() -> None:
     print(f"Connecting via '{config.DEFAULT_CONNECTION_NAME}'…")
     session = _get_session()
@@ -159,9 +136,7 @@ def main() -> None:
     n = _seed_z2(session)
     print(f"  ✓ {n} rows written to {config.Z2_TABLE}")
 
-    print("\nSeeding job-title classification…")
-    n = _seed_job_titles(session)
-    print(f"  ✓ {n} rows written to {config.JOB_TITLE_TABLE}")
+    print("\n(Job-title classification is CSV-only — no Snowflake table needed.)")
 
     print("\nDone. Run scripts/smoke_test.py to verify, then deploy with:")
     print(

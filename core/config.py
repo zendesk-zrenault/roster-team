@@ -115,8 +115,14 @@ Z2_TABLE = f"{PERSIST_DATABASE}.{PERSIST_SCHEMA}.Z2_NAMES_CACHE"
 
 # Job-title classification: which Workday JOB_TITLEs are ticket-bearing. Only
 # ticket-bearing titles stay in the roster; Non-Ticket Bearing AND management
-# ("Ticket Bearing Mgmt") titles are dropped. Seeded from the repo CSV below and
-# grown when the user classifies a previously-unseen title during review.
-# Columns: JOB_TITLE VARCHAR, TICKET_BEARING BOOLEAN.
-JOB_TITLE_TABLE = f"{PERSIST_DATABASE}.{PERSIST_SCHEMA}.JOB_TITLE_CLASSIFICATION"
+# ("Ticket Bearing Mgmt") titles are dropped.
+#
+# Source of truth = this version-controlled CSV, bundled into the deployed app so
+# BOTH apps read the same list. The LOCAL app updates it (CSV + audit log + git
+# push) when a new title is validated; the DEPLOYED app is read-only and applies
+# a new classification for the current session only. Columns: JOB_TITLE,
+# TICKET_BEARING (TRUE/FALSE).
 JOB_TITLE_CSV = "data/job_title_classification.csv"
+# Append-only audit trail of every classification added via the local app.
+# Columns: TIMESTAMP_UTC, JOB_TITLE, TICKET_BEARING, ADDED_BY.
+JOB_TITLE_AUDIT_CSV = "data/job_title_audit_log.csv"

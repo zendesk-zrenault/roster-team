@@ -22,3 +22,8 @@ entities:
       - core/
       - services/
       - ui/
+      # Job-title classification list (no PII) — the deployed app reads this file
+      # to decide which titles are ticket-bearing. Bundle ONLY these two data
+      # files, never the whole data/ dir (it holds PII: basis xlsx + Z2 csv).
+      - data/job_title_classification.csv
+      - data/job_title_audit_log.csv
