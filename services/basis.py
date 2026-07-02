@@ -24,25 +24,109 @@ REGION_EXPLORE_COL = config.ROSTER_COLUMNS["C"]   # "Region in Explore (Shift)"
 LANGUAGE_COL = config.ROSTER_COLUMNS["M"]         # "Foreign Language Advocate"
 
 
+def _read_basis_table() -> pd.DataFrame:
+    """Raw read of the Snowflake basis table (unfiltered)."""
+    from services.workday_snowflake import get_session
+
+    session = get_session()
+    df = session.sql(
+        f"SELECT EMAIL, REGION_EXPLORE, LANGUAGE FROM {config.BASIS_TABLE} ORDER BY EMAIL"
+    ).to_pandas()
+    df.columns = [EMAIL_COL, REGION_EXPLORE_COL, LANGUAGE_COL]
+    return df
+
+
 @st.cache_data(ttl=600, show_spinner=False)
 def load_basis() -> pd.DataFrame:
     """Return the basis as a DataFrame [Advocate Email, Region in Explore, Language].
 
     Emails are lowercased/stripped. Empty frame if the table is missing or empty.
+
+    Self-healing: the Snowflake basis table has intermittently corrupted to
+    all-NULL (rows present but every value NULL), which made every agent look
+    "new". If we detect that state, auto-re-seed from the local seed file (present
+    only in local dev, gitignored PII) and re-read. On the deployed app the seed
+    file is absent, so the corruption is surfaced via basis_health() instead.
     """
-    from services.workday_snowflake import get_session
+    from services.workday_snowflake import get_session  # noqa: F401 (import parity)
 
     try:
-        session = get_session()
-        df = session.sql(
-            f"SELECT EMAIL, REGION_EXPLORE, LANGUAGE FROM {config.BASIS_TABLE} ORDER BY EMAIL"
-        ).to_pandas()
-        df.columns = [EMAIL_COL, REGION_EXPLORE_COL, LANGUAGE_COL]
-        df[EMAIL_COL] = df[EMAIL_COL].astype("string").str.strip().str.lower()
-        df = df[df[EMAIL_COL].notna() & (df[EMAIL_COL] != "")]
-        return df.drop_duplicates(subset=EMAIL_COL, keep="last").reset_index(drop=True)
+        df = _read_basis_table()
     except Exception:
         return pd.DataFrame(columns=[EMAIL_COL, REGION_EXPLORE_COL, LANGUAGE_COL])
+
+    # All-NULL detection: rows exist but no usable email anywhere.
+    nonnull_emails = df[EMAIL_COL].notna().sum() if len(df) else 0
+    if len(df) > 0 and nonnull_emails == 0:
+        if _reseed_from_local_file():
+            try:
+                df = _read_basis_table()
+            except Exception:
+                pass
+
+    df[EMAIL_COL] = df[EMAIL_COL].astype("string").str.strip().str.lower()
+    df = df[df[EMAIL_COL].notna() & (df[EMAIL_COL] != "")]
+    return df.drop_duplicates(subset=EMAIL_COL, keep="last").reset_index(drop=True)
+
+
+def basis_health() -> tuple[bool, str]:
+    """Report whether the basis looks healthy. For a UI banner.
+
+    Returns (ok, message). ok=False means the table is empty or all-NULL — the
+    condition that produced the phantom "N agents not in basis" prompts.
+    """
+    try:
+        df = _read_basis_table()
+    except Exception as exc:  # noqa: BLE001
+        return False, f"Could not read the basis table: {exc}"
+    if len(df) == 0:
+        return False, "The basis table is empty — run scripts/setup_snowflake.py to seed it."
+    if df[EMAIL_COL].notna().sum() == 0:
+        return False, (
+            "The basis table is corrupted (all rows NULL). Re-seed it: locally the "
+            "app self-heals from data/basis_region_language.xlsx; otherwise run "
+            "scripts/setup_snowflake.py."
+        )
+    return True, f"Basis healthy: {df[EMAIL_COL].notna().sum():,} agents."
+
+
+def _reseed_from_local_file() -> bool:
+    """Re-seed the Snowflake basis table from the local seed xlsx (local dev only).
+
+    Returns True if a re-seed was performed. No-op (False) when the seed file is
+    absent (e.g. the deployed container, where the PII file isn't bundled).
+    """
+    from pathlib import Path
+
+    seed = Path("data/basis_region_language.xlsx")
+    if not seed.exists():
+        return False
+
+    try:
+        from snowflake.connector.pandas_tools import write_pandas
+
+        from services.workday_snowflake import get_session
+
+        raw = pd.read_excel(seed, header=0, dtype=str).fillna("")
+        raw.columns = [str(c).strip() for c in raw.columns]
+        raw = raw[[EMAIL_COL, REGION_EXPLORE_COL, LANGUAGE_COL]].copy()
+        raw.columns = ["EMAIL", "REGION_EXPLORE", "LANGUAGE"]
+        raw["EMAIL"] = raw["EMAIL"].str.strip().str.lower()
+        raw = raw[raw["EMAIL"] != ""].drop_duplicates(subset="EMAIL", keep="last")
+
+        session = get_session()
+        session.sql(
+            f"CREATE OR REPLACE TABLE {config.BASIS_TABLE} "
+            "(EMAIL VARCHAR, REGION_EXPLORE VARCHAR, LANGUAGE VARCHAR)"
+        ).collect()
+        write_pandas(
+            session._conn._conn, raw, "ROSTER_BASIS",
+            schema=config.PERSIST_SCHEMA, database=config.PERSIST_DATABASE,
+            quote_identifiers=False,
+        )
+        return True
+    except Exception:
+        return False
 
 
 def region_map() -> dict[str, str]:

@@ -191,6 +191,13 @@ if st.session_state.roster is not None:
 
     st.header("5 · Review")
 
+    # Guard: if the basis table is empty/corrupted (the recurring all-NULL bug),
+    # warn loudly instead of silently flagging every agent as "new". Locally the
+    # basis self-heals from the seed file; if it's still unhealthy, surface it.
+    basis_ok, basis_msg = basis.basis_health()
+    if not basis_ok:
+        st.error(f"⚠️ Basis problem: {basis_msg}")
+
     # --- Job-title gate: drop non-ticket-bearing rows; classify unknown titles --
     # Any title not marked ticket-bearing (incl. management) is removed. Titles the
     # shared list has never seen are surfaced for the user to classify. Titles
