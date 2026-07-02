@@ -430,5 +430,5 @@ try:
     st.caption(f"Z2 name cache: {len(lookups.load_z2_cache()):,} email→name pairs.")
 except Exception:
     pass
-st.caption("App last updated: 2026-07-02 11:09 UTC")
+st.caption("App last updated: 2026-07-02 11:29 UTC")
 st.caption("For more information contact zrenault@zendesk.com")
