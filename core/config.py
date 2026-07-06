@@ -126,3 +126,17 @@ JOB_TITLE_CSV = "data/job_title_classification.csv"
 # Append-only audit trail of every classification added via the local app.
 # Columns: TIMESTAMP_UTC, JOB_TITLE, TICKET_BEARING, ADDED_BY.
 JOB_TITLE_AUDIT_CSV = "data/job_title_audit_log.csv"
+
+# --- Google Sheet reference doc (human-editable master, on zrenault's Drive) ---
+# The 3-tab "Roster Reference Data" sheet mirrors the reference lists so they're
+# viewable/editable in Drive. The LOCAL app keeps it in sync with Snowflake (reads
+# on build, writes on validation) via the gcloud token. The DEPLOYED app CANNOT
+# reach Google (no gcloud/internet in the SiS container) — its validations land in
+# Snowflake and flow into this sheet on the next local-app sync.
+# Tabs: "Job Titles", "Z2 Names", "Region & Language Basis".
+REFERENCE_SHEET_ID = "1xUF3DX7EMvQ7ai04Z3vapgxnNmttw8clKIzYXwhRAQ0"
+REFERENCE_SHEET_TABS = {
+    "job_titles": "Job Titles",
+    "z2": "Z2 Names",
+    "basis": "Region & Language Basis",
+}
