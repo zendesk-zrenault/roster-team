@@ -58,7 +58,39 @@ found but reads 0 non-null under our grants — do NOT use it.
 - Deployed app: gate on `gsheet_sync.gcloud_available()` — no-op + a caption that Google
   sync happens via the local app.
 
-### 3. Test, commit, redeploy, update memory.
+### 3. Deployed app must treat the Gsheet as the reference source (via Snowflake mirror)
+
+**Goal (user):** when the DEPLOYED app builds a roster, it should use the reference
+data that local-app validations posted to the Google Sheet — i.e. the Gsheet is the
+source of truth for job titles / Z2 names / Region+Language basis.
+
+**Constraint (hard, confirmed):** the deployed SiS app CANNOT read Google directly
+(no gcloud, no internet egress). So it cannot query the Gsheet at runtime.
+
+**Therefore — make the Gsheet the master and mirror it into Snowflake:**
+- The Google Sheet "Roster Reference Data" is the human-editable **source of truth**.
+- The **local app is the one-way bridge Gsheet → Snowflake**: on each local run (and/or
+  a dedicated "Sync reference data" button), it READS the 3 Gsheet tabs and OVERWRITES
+  the Snowflake tables (`ROSTER_BASIS`, `Z2_NAMES_CACHE`, and — if we move job titles back
+  to a table — the job-title source) with the sheet's current contents.
+- The **deployed app keeps reading Snowflake** (unchanged), so it transparently gets
+  whatever the Gsheet holds as of the last local sync.
+
+**Direction of sync matters — get it right:**
+- Gsheet → Snowflake (this item): so deployed app sees Gsheet edits/validations.
+- Snowflake → Gsheet (item 2 above): so Gsheet shows deployed-app validations.
+  Both directions run from the local app. Decide conflict rule: **Gsheet wins** for a
+  given key when both changed (it's the human-reviewed master), unless a newer Snowflake
+  row exists — keep it simple: last-write-from-local-run overwrites, and log what changed.
+- `gsheet_sync.py` currently only does Snowflake → Gsheet (`sync_*`). ADD the reverse:
+  `pull_from_sheet()` that reads each tab and upserts into Snowflake. Add a Streamlit
+  button "⟳ Sync reference data from Google Sheet" (local-only, gated on gcloud_available()).
+
+**Honest limitation to state in the UI:** the deployed app is only as fresh as the last
+local sync. It is NOT live against the Gsheet. Truly-live deployed reads would need a
+Snowflake External Access Integration + Google service account (admin-gated, deferred).
+
+### 4. Test, commit, redeploy, update memory.
 
 ## Reminders
 - Deployed SiS app CANNOT reach Google (no gcloud/internet) — Google writes are LOCAL only.
