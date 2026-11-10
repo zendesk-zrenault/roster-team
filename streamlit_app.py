@@ -362,7 +362,9 @@ if st.session_state.roster is not None:
             corr_df = corrections.load_corrected_roster(corr_file)
             st.success(f"Read {len(corr_df):,} rows from the corrected roster.")
             with st.expander("Preview corrected roster"):
-                st.dataframe(corr_df, hide_index=True)
+                _mgr_col = config.ROSTER_COLUMNS["I"]
+                _sort_corr = corr_df.sort_values(_mgr_col) if _mgr_col in corr_df.columns else corr_df
+                st.dataframe(_sort_corr, hide_index=True)
             if st.button("Apply corrections to the basis", type="primary"):
                 r = corrections.apply_corrections(corr_df)
                 basis.load_basis.clear()
@@ -389,8 +391,61 @@ if st.session_state.roster is not None:
         except ValueError as exc:
             st.error(str(exc))
 
-    # === Step 7: Export =====================================================
-    st.header("7 · Export")
+    # === Step 7: Pre-export field check ======================================
+    st.header("7 · Pre-export check")
+
+    _REQUIRED_EXPORT_COLS = [
+        config.ROSTER_COLUMNS["A"],   # Roster Teams
+        config.ROSTER_COLUMNS["C"],   # Region in Explore (Shift)
+        config.ROSTER_COLUMNS["D"],   # Advocate
+        config.ROSTER_COLUMNS["F"],   # Advocate Email
+        config.ROSTER_COLUMNS["I"],   # Manager
+        config.ROSTER_COLUMNS["K"],   # Role
+        config.ROSTER_COLUMNS["M"],   # Foreign Language Advocate
+    ]
+    _incomplete_mask = (
+        final[_REQUIRED_EXPORT_COLS]
+        .replace("", pd.NA)
+        .isnull()
+        .any(axis=1)
+    )
+    _incomplete_rows = (
+        final.loc[_incomplete_mask, _REQUIRED_EXPORT_COLS]
+        .copy()
+        .sort_values(config.ROSTER_COLUMNS["I"])
+    )
+
+    if not _incomplete_rows.empty:
+        st.warning(
+            f"⚠️ **{len(_incomplete_rows)} row(s)** have at least one empty required field. "
+            "Edit the cells below before downloading — these fixes apply to this session only. "
+            "To carry them forward to next month, re-validate via the basis."
+        )
+        _edited = st.data_editor(
+            _incomplete_rows,
+            key="incomplete_editor",
+            hide_index=True,
+            disabled=[config.ROSTER_COLUMNS["F"]],  # Email is identity; read-only
+            column_config={
+                col: st.column_config.TextColumn(col, required=True)
+                for col in _REQUIRED_EXPORT_COLS
+            },
+        )
+        final.update(_edited)
+        _still_missing = (
+            final.loc[_incomplete_mask, _REQUIRED_EXPORT_COLS]
+            .replace("", pd.NA)
+            .isnull()
+            .any(axis=1)
+            .sum()
+        )
+        if _still_missing == 0:
+            st.success("✅ All required fields are now filled.")
+    else:
+        st.success("✅ All required fields are filled — ready to export.")
+
+    # === Step 8: Export =====================================================
+    st.header("8 · Export")
     st.write(
         f"Final roster: **{len(final):,}** rows "
         f"(removed {len(to_delete)} departed/absent, {len(disregarded)} disregarded)."
@@ -423,7 +478,10 @@ if st.session_state.roster is not None:
         )
 
     with st.expander("Final roster preview"):
-        st.dataframe(final, hide_index=True)
+        st.dataframe(
+            final.sort_values(config.ROSTER_COLUMNS["I"]).reset_index(drop=True),
+            hide_index=True,
+        )
 
 st.divider()
 try:
