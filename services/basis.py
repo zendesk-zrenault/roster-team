@@ -172,14 +172,19 @@ def find_new_agents(
     Playvox/Agyle kept emails, i.e. agents present there with a valid business
     role). Workday-only agents are not prompted; they just take the fallbacks.
 
-    Returns [Advocate Email, Advocate, Region in Workday].
+    Returns [Roster Teams, Advocate Email, Advocate, Region in Workday].
     """
     have = known_emails()
     mask = ~roster[EMAIL_COL].isin(have)
     if eligible_emails is not None:
         eligible = {e.strip().lower() for e in eligible_emails if e}
         mask &= roster[EMAIL_COL].isin(eligible)
-    cols = [EMAIL_COL, config.ROSTER_COLUMNS["D"], config.ROSTER_COLUMNS["B"]]
+    cols = [
+        config.ROSTER_COLUMNS["A"],
+        EMAIL_COL,
+        config.ROSTER_COLUMNS["D"],
+        config.ROSTER_COLUMNS["B"],
+    ]
     return roster.loc[mask, cols].reset_index(drop=True)
 
 

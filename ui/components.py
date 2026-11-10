@@ -80,6 +80,7 @@ def collect_new_agent_basis(
         )
         return {"validated": [], "disregarded": set()}
 
+    team_col = config.ROSTER_COLUMNS["A"]
     region_col = config.ROSTER_COLUMNS["C"]
     language_col = config.ROSTER_COLUMNS["M"]
     workday_region_col = config.ROSTER_COLUMNS["B"]
@@ -87,18 +88,21 @@ def collect_new_agent_basis(
 
     st.warning(
         f"{len(new_agents)} Agyle/Playvox agent(s) are **not** in the basis. "
-        "Check each row's Region in Explore and Foreign Language (pre-filled with "
-        "the Workday region and English — overwrite as needed), then tick "
-        "**Validate** to save it to the basis, or **Disregard** to drop the agent "
-        "from the roster (e.g. they're now a manager)."
+        "Review each row: edit **Region in Explore** and **Foreign Language** as "
+        "needed (Region pre-filled from Workday), then tick **Validate** to save "
+        "to the basis, or **Disregard** to drop the agent from the roster (e.g. "
+        "now a manager). Roster Team and Region in Workday are read-only for reference."
     )
 
+    # Column order: checkboxes → classification reference → editable fields.
     # Validate/Disregard default off so nothing happens until the user confirms.
     editor_df = pd.DataFrame({
         "Validate": False,
         "Disregard": False,
+        team_col: new_agents[team_col].values,
         EMAIL_COL: new_agents[EMAIL_COL].values,
         advocate_col: new_agents[advocate_col].values,
+        workday_region_col: new_agents[workday_region_col].values,
         region_col: new_agents[workday_region_col].replace("", pd.NA).fillna(""),
         language_col: config.DEFAULT_FOREIGN_LANGUAGE,
     })
@@ -107,7 +111,7 @@ def collect_new_agent_basis(
         editor_df,
         key=key,
         hide_index=True,
-        disabled=[EMAIL_COL, advocate_col],  # Region/Language remain free-text editable
+        disabled=[team_col, EMAIL_COL, advocate_col, workday_region_col],
         column_config={
             "Validate": st.column_config.CheckboxColumn(
                 "Validate", default=False, help="Tick to write this row to the basis"
@@ -115,8 +119,22 @@ def collect_new_agent_basis(
             "Disregard": st.column_config.CheckboxColumn(
                 "Disregard", default=False, help="Tick to drop this agent from the roster"
             ),
-            region_col: st.column_config.TextColumn(region_col, required=True),
-            language_col: st.column_config.TextColumn(language_col, required=True),
+            team_col: st.column_config.TextColumn(
+                team_col, help="Classified team — read only"
+            ),
+            EMAIL_COL: st.column_config.TextColumn(EMAIL_COL),
+            advocate_col: st.column_config.TextColumn(advocate_col),
+            workday_region_col: st.column_config.TextColumn(
+                workday_region_col, help="Region from Workday — read only reference"
+            ),
+            region_col: st.column_config.TextColumn(
+                region_col, required=True,
+                help="Edit if the Explore region differs from the Workday region above"
+            ),
+            language_col: st.column_config.TextColumn(
+                language_col, required=True,
+                help="Foreign language spoken, or 'English'"
+            ),
         },
     )
 
